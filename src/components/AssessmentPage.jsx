@@ -22,10 +22,8 @@ import {
 
 import { QUESTIONS_BY_SECTION } from '../data/questionsData';
 
-// ── n8n Webhook URL ─────────────────────────────────────────────────────────
-// Relative URL — Vite proxies /webhook/* → http://localhost:5678/webhook/*
-// This avoids CORS. In production, point this to your n8n host directly.
-const N8N_WEBHOOK_URL = '/webhook/policy-review';
+// ── n8n Cloud Webhook URL ──────────────────────────────────────────────────
+const N8N_WEBHOOK_URL = 'https://amruthkashi.app.n8n.cloud/webhook/policy-review';
 
 const MOCK_TEAM = [
   { name: 'Jane Cooper', role: 'Compliance Lead' },
@@ -333,7 +331,7 @@ export default function AssessmentPage({ user, onLogout }) {
         components
       };
 
-      let response = await fetch('/webhook/policy-review', {
+      let response = await fetch(N8N_WEBHOOK_URL, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(payload)
@@ -344,7 +342,7 @@ export default function AssessmentPage({ user, onLogout }) {
       // If production webhook returned empty string or 404, try test webhook URL
       if (!resText || response.status === 404) {
         console.log('Production webhook returned empty/404. Attempting Test Webhook URL...');
-        response = await fetch('/webhook-test/policy-review', {
+        response = await fetch(N8N_WEBHOOK_URL.replace('/webhook/', '/webhook-test/'), {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify(payload)
