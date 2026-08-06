@@ -22,10 +22,9 @@ import {
 
 import { QUESTIONS_BY_SECTION } from '../data/questionsData';
 
-// ── n8n Webhook URL ─────────────────────────────────────────────────────────
-// Relative URL — Vite proxies /webhook/* → http://localhost:5678/webhook/*
-// This avoids CORS. In production, point this to your n8n host directly.
-const N8N_WEBHOOK_URL = 'https://amruthkashi.app.n8n.cloud/webhook/policy-review';
+// ── Backend Policy Review API URL ───────────────────────────────────────────
+// Connected to live Azure AI Foundry server running via Google Colab + ngrok
+const N8N_WEBHOOK_URL = 'https://chaplain-statue-impeding.ngrok-free.dev/policy-review';
 
 const MOCK_TEAM = [
   { name: 'Jane Cooper', role: 'Compliance Lead' },
