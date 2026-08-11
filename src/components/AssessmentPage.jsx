@@ -18,7 +18,13 @@ import {
   X,
   AlertTriangle,
   BarChart2,
-  BookOpen
+  BookOpen,
+  ShieldCheck,
+  MessageSquare,
+  ClipboardList,
+  Quote,
+  ChevronUp,
+  ChevronDown
 } from 'lucide-react';
 
 import { QUESTIONS_BY_SECTION } from '../data/questionsData';
@@ -972,347 +978,240 @@ export default function AssessmentPage({ user, onLogout }) {
 
                 return (
                   <div key={item.id} className="obs-component-block">
-                    <div className="obs-component-title">
-                      {item.id} : Component: {item.component}
+
+                    {/* ── COMPONENT HEADER ── */}
+                    <div className="obs-comp-header">
+                      <div className="obs-comp-icon-box">
+                        <ShieldCheck size={22} />
+                      </div>
+                      <div style={{ flex: 1 }}>
+                        <div className="obs-comp-title">{item.id}: Component</div>
+                        <div className="obs-comp-subtitle">{item.component}</div>
+                      </div>
+
+                      {/* Document badge + Delete */}
+                      {uploaded ? (
+                        <div style={{ display: 'flex', gap: '8px', alignItems: 'center', marginLeft: 'auto', flexShrink: 0 }}>
+                          <span style={{
+                            display: 'inline-flex', alignItems: 'center', gap: '5px',
+                            padding: '5px 12px', borderRadius: '20px',
+                            background: '#eff6ff', border: '1px solid #bfdbfe',
+                            color: '#2563eb', fontSize: '12px', fontWeight: 600
+                          }}>
+                            <Paperclip size={12} />
+                            {uploaded.fileName}
+                          </span>
+                          <button
+                            onClick={() => setDeleteConfirmId(item.id)}
+                            style={{
+                              display: 'inline-flex', alignItems: 'center', gap: '4px',
+                              padding: '5px 12px', borderRadius: '20px',
+                              background: '#fff1f2', border: '1px solid #fecdd3',
+                              color: '#e11d48', fontSize: '12px', fontWeight: 600,
+                              cursor: 'pointer'
+                            }}
+                          >
+                            <Trash2 size={12} />
+                            Delete
+                          </button>
+                        </div>
+                      ) : (
+                        <span style={{ fontSize: '11.5px', color: '#94a3b8', fontStyle: 'italic', marginLeft: 'auto', flexShrink: 0 }}>
+                          No document uploaded
+                        </span>
+                      )}
                     </div>
 
+                    {/* ── TWO-COLUMN BODY ── */}
                     <div className="obs-content-grid">
 
-                      {/* ── OBSERVATION PANEL ─────────────────────────────── */}
-                      <div className="obs-box-panel">
-
-                        {/* Header: "Observation" label + file name + Delete only */}
-                        <div className="obs-box-label" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '8px' }}>
-                          <span>Observation</span>
-                          {uploaded ? (
-                            <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
-                              <span
-                                className="doc-file-link"
-                                style={{ fontSize: '12px', cursor: 'default', pointerEvents: 'none', opacity: 0.8 }}
-                              >
-                                <Paperclip size={13} />
-                                {uploaded.fileName}
-                              </span>
-                              <button
-                                className="secondary-btn"
-                                style={{ padding: '3px 8px', fontSize: '11px', color: '#ef4444', borderColor: '#fca5a5' }}
-                                onClick={() => setDeleteConfirmId(item.id)}
-                              >
-                                <Trash2 size={12} />
-                                Delete
-                              </button>
+                      {/* LEFT: Questions / Observations */}
+                      <div className="obs-main-col">
+                        {!uploaded ? (
+                          <div className="obs-no-doc">
+                            <div className="obs-no-doc-icon"><FileText size={22} /></div>
+                            <div style={{ fontWeight: 700, color: '#6366f1', fontSize: '13px' }}>No document uploaded</div>
+                            <div style={{ fontSize: '12px' }}>Upload a policy document to get AI-powered observations</div>
+                          </div>
+                        ) : questionEntries.length === 0 ? (
+                          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '16px 18px', background: '#f8fafc', borderRadius: '10px', border: '1px solid #e2e8f0' }}>
+                            <div>
+                              <div style={{ fontSize: '13px', fontWeight: 700, color: '#334155' }}>Document uploaded</div>
+                              <div style={{ fontSize: '12px', color: '#64748b', marginTop: '2px' }}>Evaluation pending — run AI Verification to generate observations</div>
                             </div>
-                          ) : (
-                            <span style={{ fontSize: '11px', color: '#94a3b8', fontStyle: 'italic', fontWeight: 500 }}>
-                              No document uploaded
-                            </span>
-                          )}
-                        </div>
+                            <button
+                              className="primary-btn"
+                              style={{ padding: '7px 14px', fontSize: '12px', whiteSpace: 'nowrap', marginLeft: '16px' }}
+                              onClick={handleProceedToReview}
+                            >
+                              ✨ Run AI Verification
+                            </button>
+                          </div>
+                        ) : (
+                          questionEntries.map((entry, qIdx) => {
+                            const cardKey = `${item.id}__${entry.key}`;
+                            const isExpanded = Boolean(expandedObs[cardKey]);
+                            const isRefExpanded = Boolean(expandedRef[cardKey]);
+                            const agree = isAgreeFinding(entry.aiFinding);
+                            const hasFinding = Boolean(entry.aiFinding);
+                            const hasScore = Boolean(entry.score);
+                            const hasRef = Boolean(entry.reference);
 
-                        {/* Body */}
-                        <div style={{ marginTop: '6px', flex: 1 }}>
-                          {!uploaded ? (
-                            <div style={{
-                              background: '#f8fafc',
-                              borderRadius: '6px',
-                              padding: '12px 14px',
-                              minHeight: '60px',
-                              display: 'flex',
-                              alignItems: 'center',
-                              color: 'var(--text-muted)',
-                              fontSize: '12px',
-                              fontStyle: 'italic'
-                            }}>
-                              No document uploaded.
-                            </div>
-                          ) : questionEntries.length === 0 ? (
-                            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '10px 14px', background: '#f8fafc', borderRadius: '6px' }}>
-                              <span style={{ color: '#64748b', fontSize: '12.5px', fontStyle: 'italic' }}>
-                                Document uploaded. Evaluation pending.
-                              </span>
-                              <button
-                                className="primary-btn"
-                                style={{ padding: '4px 10px', fontSize: '11px', whiteSpace: 'nowrap' }}
-                                onClick={handleProceedToReview}
-                              >
-                                ✨ Run AI Verification
-                              </button>
-                            </div>
-                          ) : (
-                            /* ── ONE CARD PER QUESTION ── */
-                            <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
-                              {questionEntries.map((entry, qIdx) => {
-                                  const cardKey = `${item.id}__${entry.key}`;
-                                  const isExpanded = Boolean(expandedObs[cardKey]);
-                                  const isRefExpanded = Boolean(expandedRef[cardKey]);
-                                  const agree = isAgreeFinding(entry.aiFinding);
-                                  const hasFinding = Boolean(entry.aiFinding);
-                                  const hasScore = Boolean(entry.score);
-                                  const hasRef = Boolean(entry.reference);
+                            const scoreNum = (() => {
+                              if (!entry.score) return 0;
+                              const n = parseInt(String(entry.score).replace('%', '').trim(), 10);
+                              return isNaN(n) ? 0 : Math.min(100, Math.max(0, n));
+                            })();
 
-                                  // Parse score as a number for progress bar
-                                  const scoreNum = (() => {
-                                    if (!entry.score) return 0;
-                                    const n = parseInt(String(entry.score).replace('%', '').trim(), 10);
-                                    return isNaN(n) ? 0 : Math.min(100, Math.max(0, n));
-                                  })();
+                            const matchedCriteria = item.criteria[qIdx] || item.criteria.find(c => c.id === entry.key) || null;
+                            const userAnswer = matchedCriteria
+                              ? (sectionStates[sectionKey]?.[item.id]?.criteriaAnswers?.[matchedCriteria.id] || 'Yes')
+                              : 'Yes';
+                            const userAnswerYes = userAnswer === 'Yes';
 
-                                  // User answer for this question (match by position or criteria id)
-                                  const matchedCriteria = item.criteria[qIdx] || item.criteria.find(c => c.id === entry.key) || null;
-                                  const userAnswer = matchedCriteria
-                                    ? (sectionStates[sectionKey]?.[item.id]?.criteriaAnswers?.[matchedCriteria.id] || 'Yes')
-                                    : 'Yes';
-                                  const userAnswerYes = userAnswer === 'Yes';
+                            const scoreColor = scoreNum >= 75 ? '#16a34a' : scoreNum >= 50 ? '#d97706' : '#dc2626';
+                            const scoreGradient = scoreNum >= 75
+                              ? 'linear-gradient(90deg, #4ade80, #22c55e)'
+                              : scoreNum >= 50
+                              ? 'linear-gradient(90deg, #fbbf24, #f59e0b)'
+                              : 'linear-gradient(90deg, #f87171, #ef4444)';
 
-                                  return (
-                                    <div
-                                      key={entry.key}
-                                      style={{
-                                        background: '#ffffff',
-                                        border: '1px solid #e2e8f0',
-                                        borderRadius: '8px',
-                                        padding: '14px 16px',
-                                        boxShadow: '0 1px 3px rgba(0,0,0,0.03)'
-                                      }}
-                                    >
-                                      {/* ── Row 1: Question text + Compact Top-Right Badges ── */}
-                                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: '12px', marginBottom: '8px' }}>
-                                        <div style={{ fontSize: '13px', fontWeight: 700, color: '#1e293b', flex: 1, lineHeight: '1.5' }}>
-                                          Q{qIdx + 1}: {entry.question || `Criteria ${entry.key.toUpperCase()}`}
-                                        </div>
+                            return (
+                              <div key={entry.key} className="obs-question-card">
 
-                                        {/* Top-Right Badges: User Answer & AI Verdict */}
-                                        <div style={{ display: 'flex', alignItems: 'center', gap: '6px', flexShrink: 0 }}>
-                                          {/* User Answer Badge */}
-                                          <span style={{
-                                            fontSize: '11px',
-                                            fontWeight: 600,
-                                            padding: '2px 8px',
-                                            borderRadius: '12px',
-                                            background: userAnswerYes ? '#f1f5f9' : '#fff7ed',
-                                            color: userAnswerYes ? '#475569' : '#c2410c',
-                                            border: `1px solid ${userAnswerYes ? '#cbd5e1' : '#ffedd5'}`,
-                                            whiteSpace: 'nowrap'
-                                          }}>
-                                            User: <strong>{userAnswer}</strong>
-                                          </span>
-
-                                          {/* AI Verdict Badge */}
-                                          {hasFinding && (
-                                            <span style={{
-                                              fontSize: '11px',
-                                              fontWeight: 700,
-                                              padding: '2px 9px',
-                                              borderRadius: '12px',
-                                              background: agree ? '#dcfce7' : '#fee2e2',
-                                              color: agree ? '#15803d' : '#b91c1c',
-                                              border: `1px solid ${agree ? '#86efac' : '#fca5a5'}`,
-                                              whiteSpace: 'nowrap'
-                                            }}>
-                                              AI: <strong>{entry.aiFinding}</strong>
-                                            </span>
-                                          )}
-                                        </div>
-                                      </div>
-
-                                      {/* ── Row 2: One-line Summary ── */}
-                                      {entry.summary && (
-                                        <div style={{
-                                          fontSize: '12.5px',
-                                          color: '#334155',
-                                          marginBottom: '10px',
-                                          lineHeight: '1.5',
-                                          fontWeight: 500
-                                        }}>
-                                          {entry.summary}
-                                        </div>
-                                      )}
-
-                                      {/* ── Row 3: Action Toggles (Details + Reference) ── */}
-                                      {(entry.observation || hasRef) && (
-                                        <div style={{ marginBottom: hasScore ? '12px' : '0' }}>
-                                          <div style={{ display: 'flex', gap: '8px', alignItems: 'center', flexWrap: 'wrap' }}>
-                                            {/* Details Toggle */}
-                                            {entry.observation && (
-                                              <button
-                                                onClick={() => toggleObsExpand(item.id, entry.key)}
-                                                style={{
-                                                  background: isExpanded ? '#f1f5f9' : '#ffffff',
-                                                  border: '1px solid #cbd5e1',
-                                                  borderRadius: '5px',
-                                                  padding: '3px 10px',
-                                                  fontSize: '11.5px',
-                                                  fontWeight: 600,
-                                                  color: '#475569',
-                                                  cursor: 'pointer',
-                                                  display: 'inline-flex',
-                                                  alignItems: 'center',
-                                                  gap: '5px',
-                                                  transition: 'all 0.15s ease'
-                                                }}
-                                              >
-                                                {isExpanded ? '▲ Hide Details' : '▼ View Full Details'}
-                                              </button>
-                                            )}
-
-                                            {/* Reference Toggle */}
-                                            {hasRef && (
-                                              <button
-                                                onClick={() => toggleRefExpand(item.id, entry.key)}
-                                                style={{
-                                                  background: isRefExpanded ? '#eef2ff' : '#ffffff',
-                                                  border: `1px solid ${isRefExpanded ? '#c7d2fe' : '#cbd5e1'}`,
-                                                  borderRadius: '5px',
-                                                  padding: '3px 10px',
-                                                  fontSize: '11.5px',
-                                                  fontWeight: 600,
-                                                  color: isRefExpanded ? '#4338ca' : '#475569',
-                                                  cursor: 'pointer',
-                                                  display: 'inline-flex',
-                                                  alignItems: 'center',
-                                                  gap: '5px',
-                                                  transition: 'all 0.15s ease'
-                                                }}
-                                              >
-                                                <BookOpen size={12} />
-                                                {isRefExpanded ? 'Hide Reference' : 'View Reference'}
-                                              </button>
-                                            )}
-                                          </div>
-
-                                          {/* Expanded Full Observation Details */}
-                                          {isExpanded && entry.observation && (
-                                            <div style={{
-                                              fontSize: '12.5px',
-                                              lineHeight: '1.7',
-                                              color: '#1e293b',
-                                              whiteSpace: 'pre-line',
-                                              background: '#f8fafc',
-                                              borderRadius: '6px',
-                                              padding: '12px 14px',
-                                              borderLeft: '3px solid #3b82f6',
-                                              marginTop: '8px'
-                                            }}>
-                                              {entry.observation}
-                                            </div>
-                                          )}
-
-                                          {/* Expanded Reference Citation */}
-                                          {isRefExpanded && hasRef && (
-                                            <div style={{ marginTop: '8px' }}>
-                                              {isNoMatchingRef(entry.reference) ? (
-                                                <div style={{
-                                                  fontSize: '11.5px',
-                                                  color: '#94a3b8',
-                                                  fontStyle: 'italic',
-                                                  background: '#f8fafc',
-                                                  borderRadius: '5px',
-                                                  padding: '8px 12px',
-                                                  border: '1px dashed #cbd5e1',
-                                                  display: 'flex',
-                                                  alignItems: 'center',
-                                                  gap: '6px'
-                                                }}>
-                                                  <span>No matching line reference found in uploaded document.</span>
-                                                </div>
-                                              ) : (
-                                                <div style={{
-                                                  fontSize: '12px',
-                                                  lineHeight: '1.6',
-                                                  color: '#1e293b',
-                                                  background: '#f0fdf4',
-                                                  borderRadius: '6px',
-                                                  padding: '10px 14px',
-                                                  borderLeft: '3px solid #16a34a',
-                                                  border: '1px solid #dcfce7'
-                                                }}>
-                                                  <div style={{ fontSize: '10.5px', fontWeight: 700, color: '#15803d', textTransform: 'uppercase', letterSpacing: '0.4px', marginBottom: '4px' }}>
-                                                    Document Reference & Citation
-                                                  </div>
-                                                  <div style={{ fontFamily: 'monospace, monospace', fontSize: '11.5px', color: '#0f172a', whiteSpace: 'pre-line' }}>
-                                                    {entry.reference}
-                                                  </div>
-                                                </div>
-                                              )}
-                                            </div>
-                                          )}
-                                        </div>
-                                      )}
-
-                                    {/* ── Row 4: AI Confidence Score (Compact Left-Aligned Bar) ── */}
-                                    {hasScore && (
-                                      <div style={{
-                                        marginTop: '10px',
-                                        paddingTop: '8px',
-                                        borderTop: '1px dashed #f1f5f9',
-                                        display: 'flex',
-                                        alignItems: 'center',
-                                        gap: '10px'
-                                      }}>
-                                        <span style={{ fontSize: '11px', fontWeight: 600, color: '#64748b', whiteSpace: 'nowrap' }}>
-                                          AI Confidence:
-                                        </span>
-
-                                        {/* Slim 4px progress track directly beside label */}
-                                        <div style={{
-                                          width: '110px',
-                                          height: '4px',
-                                          background: '#e2e8f0',
-                                          borderRadius: '99px',
-                                          overflow: 'hidden'
-                                        }}>
-                                          <div style={{
-                                            height: '100%',
-                                            width: `${scoreNum}%`,
-                                            background: scoreNum >= 75
-                                              ? 'linear-gradient(90deg, #34d399, #059669)'
-                                              : scoreNum >= 50
-                                                ? 'linear-gradient(90deg, #fbbf24, #d97706)'
-                                                : 'linear-gradient(90deg, #fb7185, #e11d48)',
-                                            borderRadius: '99px',
-                                            transition: 'width 0.6s cubic-bezier(0.4, 0, 0.2, 1)'
-                                          }} />
-                                        </div>
-
-                                        <span style={{
-                                          fontSize: '11px',
-                                          fontWeight: 700,
-                                          color: scoreNum >= 75 ? '#047857' : scoreNum >= 50 ? '#b45309' : '#be123c'
-                                        }}>
-                                          {fmtScore(entry.score)}
-                                        </span>
+                                {/* Row 1: Number + Title + Badges */}
+                                <div style={{ display: 'flex', gap: '12px', alignItems: 'flex-start' }}>
+                                  <div className="obs-q-num">{String(qIdx + 1).padStart(2, '0')}</div>
+                                  <div style={{ flex: 1 }}>
+                                    <div style={{ fontSize: '13.5px', fontWeight: 700, color: '#0f172a', lineHeight: '1.45' }}>
+                                      {entry.question || `Criteria ${entry.key.toUpperCase()}`}
+                                    </div>
+                                    {entry.summary && (
+                                      <div style={{ fontSize: '12px', color: '#64748b', marginTop: '4px', fontWeight: 500 }}>
+                                        {entry.summary}
                                       </div>
                                     )}
                                   </div>
-                                );
-                              })}
+                                  {/* Top-right badges */}
+                                  <div style={{ display: 'flex', alignItems: 'center', gap: '6px', flexShrink: 0 }}>
+                                    <span className={`obs-pill obs-pill-user`}>
+                                      User: <strong>{userAnswer}</strong>
+                                    </span>
+                                    {hasFinding && (
+                                      <span className={`obs-pill ${agree ? 'obs-pill-agree' : 'obs-pill-missing'}`}>
+                                        AI: <strong>{entry.aiFinding}</strong>
+                                      </span>
+                                    )}
+                                  </div>
+                                </div>
+
+                                {/* Row 2: Action buttons */}
+                                <div style={{ display: 'flex', gap: '8px', marginTop: '12px', flexWrap: 'wrap' }}>
+                                  {entry.observation && (
+                                    <button
+                                      className={`obs-toggle-btn${isExpanded ? ' active' : ''}`}
+                                      onClick={() => toggleObsExpand(item.id, entry.key)}
+                                    >
+                                      {isExpanded ? <ChevronUp size={13} /> : <ChevronDown size={13} />}
+                                      {isExpanded ? 'Hide Details' : 'View Details'}
+                                    </button>
+                                  )}
+                                  {hasRef && (
+                                    <button
+                                      className={`obs-toggle-btn ref${isRefExpanded ? ' active' : ''}`}
+                                      onClick={() => toggleRefExpand(item.id, entry.key)}
+                                    >
+                                      <BookOpen size={13} />
+                                      {isRefExpanded ? 'Hide Reference' : 'View Reference'}
+                                    </button>
+                                  )}
+                                </div>
+
+                                {/* Expandable Observation panel */}
+                                {isExpanded && entry.observation && (
+                                  <div className="obs-detail-panel">
+                                    <div className="obs-detail-panel-heading">
+                                      <FileText size={14} />
+                                      Observation
+                                    </div>
+                                    <div className="obs-detail-panel-body">{entry.observation}</div>
+                                  </div>
+                                )}
+
+                                {/* Expandable Reference panel */}
+                                {isRefExpanded && hasRef && (
+                                  isNoMatchingRef(entry.reference) ? (
+                                    <div className="obs-ref-no-match">No matching line reference found in uploaded document.</div>
+                                  ) : (
+                                    <div className="obs-ref-panel">
+                                      <div className="obs-ref-panel-heading">
+                                        <Quote size={14} />
+                                        Document Reference &amp; Citation
+                                      </div>
+                                      <div style={{ fontSize: '12.5px', lineHeight: '1.65', color: '#1e293b', whiteSpace: 'pre-line' }}>
+                                        {entry.reference}
+                                      </div>
+                                    </div>
+                                  )
+                                )}
+
+                                {/* AI Confidence score */}
+                                {hasScore && (
+                                  <div className="obs-confidence-row">
+                                    <span className="obs-confidence-label">AI Confidence</span>
+                                    <div className="obs-confidence-track">
+                                      <div
+                                        className="obs-confidence-fill"
+                                        style={{ width: `${scoreNum}%`, background: scoreGradient }}
+                                      />
+                                    </div>
+                                    <span className="obs-confidence-pct" style={{ color: scoreColor }}>
+                                      {fmtScore(entry.score)}
+                                    </span>
+                                  </div>
+                                )}
+
+                              </div>
+                            );
+                          })
+                        )}
+                      </div>
+
+                      {/* RIGHT: Sidebar */}
+                      <div className="obs-sidebar-col">
+
+                        {/* Review Comments card */}
+                        <div className="obs-sidebar-card">
+                          <div className="obs-sidebar-card-heading">
+                            <MessageSquare size={15} style={{ color: '#2563eb' }} />
+                            Review Comments
+                          </div>
+                          <textarea
+                            className="review-comments-input"
+                            value={commentText}
+                            placeholder="Add your review observations or notes here..."
+                            onChange={(e) => {
+                              const val = e.target.value;
+                              setReviewComments(prev => ({ ...prev, [item.id]: val }));
+                            }}
+                          />
+                          {commentText && (
+                            <div style={{ marginTop: '8px', textAlign: 'right' }}>
+                              <span style={{ fontSize: '11px', color: '#64748b' }}>{commentText.length} chars</span>
                             </div>
                           )}
                         </div>
-                      </div>
 
-                      {/* REVIEW COMMENTS BOX — unchanged */}
-                      <div className="obs-box-panel">
-                        <div className="obs-box-label">Review Comments</div>
-                        <textarea
-                          className="review-comments-input"
-                          value={commentText}
-                          placeholder="Add review comments..."
-                          onChange={(e) => {
-                            const val = e.target.value;
-                            setReviewComments(prev => ({
-                              ...prev,
-                              [item.id]: val
-                            }));
-                          }}
-                        />
-                      </div>
 
+                      </div>
                     </div>
+
                   </div>
                 );
               });
             })}
+
+
           </div>
 
           {/* FOOTER BAR WITH GENERATE ACTION PLAN BUTTON */}
