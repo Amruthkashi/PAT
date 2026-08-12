@@ -24,10 +24,12 @@ import {
   ClipboardList,
   Quote,
   ChevronUp,
-  ChevronDown
+  ChevronDown,
+  ExternalLink
 } from 'lucide-react';
 
 import { QUESTIONS_BY_SECTION } from '../data/questionsData';
+import PdfHighlightViewer from './PdfHighlightViewer';
 
 // ── Backend Policy Review API URL ───────────────────────────────────────────
 // Connected to live Azure AI Foundry server running via Google Colab + ngrok
@@ -47,6 +49,19 @@ const TABS = [
   'Internal Feedback Systems',
   'Administrative Practices'
 ];
+
+/**
+ * Parses markdown-style bold text (**text**) and renders it with <strong> tags in React.
+ */
+const renderFormattedText = (text) => {
+  if (!text || typeof text !== 'string') return text;
+  const parts = text.split(/\*\*(.*?)\*\*/g);
+  if (parts.length <= 1) return text;
+
+  return parts.map((part, index) =>
+    index % 2 === 1 ? <strong key={index}>{part}</strong> : part
+  );
+};
 
 export default function AssessmentPage({ user, onLogout }) {
   // 4 Steps: 'ASSESSMENT' | 'UPLOAD_DOCUMENTS' | 'REVIEW_OBSERVATIONS' | 'ACTION_PLAN'
@@ -129,6 +144,9 @@ export default function AssessmentPage({ user, onLogout }) {
   const [previewDoc, setPreviewDoc] = useState(null);
   const [deleteConfirmId, setDeleteConfirmId] = useState(null);
   const [showLogoutConfirm, setShowLogoutConfirm] = useState(false);
+
+  // PDF highlight viewer state: { fileBase64, fileName, reference } | null
+  const [pdfViewer, setPdfViewer] = useState(null);
 
   const [searchStates, setSearchStates] = useState({});
   const [toastMessage, setToastMessage] = useState('');
@@ -379,36 +397,56 @@ export default function AssessmentPage({ user, onLogout }) {
         try {
           data = JSON.parse(resText);
         } catch (e) {
-          console.error('n8n response parsing failed. Raw response:', resText);
+          console.error('Response parsing failed. Raw response:', resText);
         }
 
-        console.log('>>> n8n Raw Webhook Response:', data);
+        console.log('API Response:', data);
 
         if (data.success && data.observations) {
-          // Normalize observations into { P1: { p1_c1: '...', p1_c2: '...' }, ... }
           const rawObs = data.observations;
+          console.log('>>> Raw observations from backend:', rawObs);
+
+          /**
+           * Normalize to: { [CompId]: { [criteriaKey]: { question, observation, AI_finding, score, reference } } }
+           *
+           * Backend sends one of:
+           *   A) { "P1": { "p1_c1": { question, observation, ... }, "p1_c2": {...} } }  ← documented shape
+           *   B) { "p1_c1": { question, observation, ... }, "p1_c2": {...} }             ← flat criteria shape
+           *   C) { "component_0": { ... } }                                              ← generic keys
+           */
           const normalized = {};
-          const payloadCompIds = (components || []).map(c => c.componentId || c.id || 'P1');
+          const knownCompIds = new Set(
+            Object.keys(QUESTIONS_BY_SECTION).flatMap(sk =>
+              QUESTIONS_BY_SECTION[sk].items.map(it => it.id)
+            )
+          );
+          const payloadCompIds = (components || []).map(c => c.componentId || c.id);
 
-          Object.keys(rawObs).forEach((k, idx) => {
-            const val = rawObs[k];
-            const targetCompId = payloadCompIds[idx] || (k.includes('_') ? k.split('_')[0].toUpperCase() : 'P1');
+          Object.entries(rawObs).forEach(([key, val], idx) => {
+            if (!val || typeof val !== 'object') return;
 
-            if (typeof val === 'object' && val !== null) {
-              normalized[targetCompId] = val;
-              normalized[k] = val;
-            } else if (typeof val === 'string') {
-              if (!normalized[targetCompId]) normalized[targetCompId] = {};
-              normalized[targetCompId][k] = val;
-            }
-          });
+            const valKeys = Object.keys(val);
+            const firstVal = val[valKeys[0]];
+            const isNestedBlock =
+              valKeys.length > 0 && firstVal && typeof firstVal === 'object' &&
+              ('question' in firstVal || 'observation' in firstVal || 'AI_finding' in firstVal);
 
-          // Fallback: if flat keys like p1_c1 exist at root, group under component P1
-          Object.keys(rawObs).forEach(k => {
-            if (typeof rawObs[k] === 'string' && k.includes('_')) {
-              const compId = k.split('_')[0].toUpperCase();
+            if (isNestedBlock) {
+              // Shape A: outer key is component ID like "P1", inner keys are criteria like "p1_c1"
+              const compId = knownCompIds.has(key)
+                ? key
+                : (payloadCompIds[idx] || key.toUpperCase());
+
+              normalized[compId] = { ...(normalized[compId] || {}), ...val };
+              if (compId !== key) normalized[key] = normalized[compId];
+            } else {
+              // Shape B / C: key is a criteria key or generic key, val is a flat object
+              const compId =
+                payloadCompIds[idx] ||
+                (key.includes('_') ? key.split('_')[0].toUpperCase() : key.toUpperCase());
+
               if (!normalized[compId]) normalized[compId] = {};
-              normalized[compId][k] = rawObs[k];
+              normalized[compId][key] = val;
             }
           });
 
@@ -416,12 +454,12 @@ export default function AssessmentPage({ user, onLogout }) {
           setAiObservations(normalized);
           setToastMessage(`AI verified ${data.processedCount || components.length} document(s) successfully!`);
         } else {
-          console.warn('n8n returned empty observations:', data);
-          setToastMessage('n8n webhook responded but observations object was empty. Check n8n execution.');
+          console.warn('Backend returned empty/missing observations:', data);
+          setToastMessage('Backend responded but observations were empty. Check backend logs.');
         }
       } else {
-        console.error('n8n webhook error:', response.status, resText);
-        setToastMessage(`n8n webhook error (${response.status}). Check n8n workflow execution logs.`);
+        console.error('Backend error:', response.status, resText);
+        setToastMessage(`Backend error (${response.status}). Check backend logs.`);
       }
     } catch (error) {
       console.error('AI processing error:', error);
@@ -749,7 +787,7 @@ export default function AssessmentPage({ user, onLogout }) {
                   {itemState.showRationale && (
                     <div className="rationale-drawer">
                       <div className="rationale-drawer-title">Rationale Details</div>
-                      <p>{item.rationaleText}</p>
+                      <p>{renderFormattedText(item.rationaleText)}</p>
                     </div>
                   )}
                 </div>
@@ -952,7 +990,8 @@ export default function AssessmentPage({ user, onLogout }) {
                       score:       val.score       || '',
                       reference:   val.reference   || val.citation   || val.ref || ''
                     }))
-                    .filter(e => e.observation || e.summary || e.reference);
+                    // Keep any entry that has at least one meaningful field — don't silently drop
+                    .filter(e => e.question || e.observation || e.summary || e.reference || e.aiFinding);
                 };
 
                 const questionEntries = buildQuestionEntries(componentObs);
@@ -1063,7 +1102,42 @@ export default function AssessmentPage({ user, onLogout }) {
                               return isNaN(n) ? 0 : Math.min(100, Math.max(0, n));
                             })();
 
-                            const matchedCriteria = item.criteria[qIdx] || item.criteria.find(c => c.id === entry.key) || null;
+                            // Helper to accurately match criteria ID (e.g. 'p2_c2' or 'c2')
+                            const findCriteriaForKey = (criteriaList, key, fallbackIndex) => {
+                              if (!criteriaList || !criteriaList.length) return null;
+                              const kLower = String(key || '').toLowerCase().trim();
+
+                              // 1. Exact ID match (e.g., 'p2_c1' === 'p2_c1')
+                              let match = criteriaList.find(c => String(c.id).toLowerCase() === kLower);
+                              if (match) return match;
+
+                              // 2. Ends-with / contains match (e.g., key 'c2' matching 'p2_c2')
+                              match = criteriaList.find(c => {
+                                const cIdLower = String(c.id).toLowerCase();
+                                return cIdLower.endsWith(`_${kLower}`) || cIdLower === kLower || kLower.endsWith(`_${cIdLower}`);
+                              });
+                              if (match) return match;
+
+                              // 3. Number match (e.g. '2' or 'c2' -> index 1)
+                              const numMatch = kLower.match(/\d+/);
+                              if (numMatch) {
+                                const idx = parseInt(numMatch[0], 10) - 1;
+                                if (idx >= 0 && idx < criteriaList.length) {
+                                  return criteriaList[idx];
+                                }
+                              }
+
+                              // 4. Fallback to array index
+                              if (typeof fallbackIndex === 'number' && fallbackIndex >= 0 && fallbackIndex < criteriaList.length) {
+                                return criteriaList[fallbackIndex];
+                              }
+                              return null;
+                            };
+
+                            const matchedCriteria = findCriteriaForKey(item.criteria, entry.key, qIdx);
+                            const criteriaIndex = matchedCriteria ? item.criteria.indexOf(matchedCriteria) : qIdx;
+                            const displayNum = String(criteriaIndex + 1).padStart(2, '0');
+
                             const userAnswer = matchedCriteria
                               ? (sectionStates[sectionKey]?.[item.id]?.criteriaAnswers?.[matchedCriteria.id] || 'Yes')
                               : 'Yes';
@@ -1081,14 +1155,14 @@ export default function AssessmentPage({ user, onLogout }) {
 
                                 {/* Row 1: Number + Title + Badges */}
                                 <div style={{ display: 'flex', gap: '12px', alignItems: 'flex-start' }}>
-                                  <div className="obs-q-num">{String(qIdx + 1).padStart(2, '0')}</div>
+                                  <div className="obs-q-num">{displayNum}</div>
                                   <div style={{ flex: 1 }}>
                                     <div style={{ fontSize: '13.5px', fontWeight: 700, color: '#0f172a', lineHeight: '1.45' }}>
-                                      {entry.question || `Criteria ${entry.key.toUpperCase()}`}
+                                      {entry.question ? renderFormattedText(entry.question) : matchedCriteria?.label ? renderFormattedText(matchedCriteria.label) : `Criteria ${entry.key.toUpperCase()}`}
                                     </div>
                                     {entry.summary && (
                                       <div style={{ fontSize: '12px', color: '#64748b', marginTop: '4px', fontWeight: 500 }}>
-                                        {entry.summary}
+                                        {renderFormattedText(entry.summary)}
                                       </div>
                                     )}
                                   </div>
@@ -1134,7 +1208,7 @@ export default function AssessmentPage({ user, onLogout }) {
                                       <FileText size={14} />
                                       Observation
                                     </div>
-                                    <div className="obs-detail-panel-body">{entry.observation}</div>
+                                    <div className="obs-detail-panel-body">{renderFormattedText(entry.observation)}</div>
                                   </div>
                                 )}
 
@@ -1149,8 +1223,38 @@ export default function AssessmentPage({ user, onLogout }) {
                                         Document Reference &amp; Citation
                                       </div>
                                       <div style={{ fontSize: '12.5px', lineHeight: '1.65', color: '#1e293b', whiteSpace: 'pre-line' }}>
-                                        {entry.reference}
+                                        {renderFormattedText(entry.reference)}
                                       </div>
+                                      {/* View in File button — opens PDF with highlight */}
+                                      {uploaded?.fileBase64 && (
+                                        <div style={{ marginTop: '10px', display: 'flex', justifyContent: 'flex-end' }}>
+                                          <button
+                                            onClick={() => setPdfViewer({
+                                              fileBase64: uploaded.fileBase64,
+                                              fileName: uploaded.fileName,
+                                              reference: entry.reference,
+                                            })}
+                                            style={{
+                                              display: 'inline-flex',
+                                              alignItems: 'center',
+                                              gap: '6px',
+                                              padding: '6px 14px',
+                                              borderRadius: '20px',
+                                              background: 'linear-gradient(135deg, #1e3a5f, #0b3b60)',
+                                              border: '1px solid rgba(37,99,235,0.3)',
+                                              color: '#ffffff',
+                                              fontSize: '12px',
+                                              fontWeight: 700,
+                                              cursor: 'pointer',
+                                              boxShadow: '0 2px 8px rgba(11,59,96,0.25)',
+                                              transition: 'all 0.15s ease',
+                                            }}
+                                          >
+                                            <ExternalLink size={12} />
+                                            View in File
+                                          </button>
+                                        </div>
+                                      )}
                                     </div>
                                   )
                                 )}
@@ -1556,6 +1660,16 @@ export default function AssessmentPage({ user, onLogout }) {
           <CheckCircle2 size={16} />
           {toastMessage}
         </div>
+      )}
+
+      {/* PDF HIGHLIGHT VIEWER MODAL */}
+      {pdfViewer && (
+        <PdfHighlightViewer
+          fileBase64={pdfViewer.fileBase64}
+          fileName={pdfViewer.fileName}
+          reference={pdfViewer.reference}
+          onClose={() => setPdfViewer(null)}
+        />
       )}
     </div>
   );
