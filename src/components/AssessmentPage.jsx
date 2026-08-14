@@ -1012,6 +1012,14 @@ export default function AssessmentPage({ user, onLogout }) {
                   const r = String(ref).trim().toLowerCase();
                   return r.includes('no matching') || r.includes('not found') || r.includes('no line') || r === 'none' || r === 'n/a';
                 };
+                const isAiAnswerMissing = (finding, ref) => {
+                  if (!finding) return true;
+                  const f = String(finding).trim().toLowerCase();
+                  if (f === 'missing' || f.includes('missing') || f.includes('not found') || f === 'no' || f === 'absent') {
+                    return true;
+                  }
+                  return isNoMatchingRef(ref);
+                };
 
 
 
@@ -1214,8 +1222,11 @@ export default function AssessmentPage({ user, onLogout }) {
 
                                 {/* Expandable Reference panel */}
                                 {isRefExpanded && hasRef && (
-                                  isNoMatchingRef(entry.reference) ? (
-                                    <div className="obs-ref-no-match">No matching line reference found in uploaded document.</div>
+                                  isAiAnswerMissing(entry.aiFinding, entry.reference) ? (
+                                    <div className="obs-ref-no-match">
+                                      <AlertTriangle size={14} style={{ color: '#f59e0b', flexShrink: 0 }} />
+                                      <span>No reference citation available — requirement was not found in the uploaded document.</span>
+                                    </div>
                                   ) : (
                                     <div className="obs-ref-panel">
                                       <div className="obs-ref-panel-heading">
