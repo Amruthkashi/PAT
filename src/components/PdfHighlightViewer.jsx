@@ -2,27 +2,24 @@ import React, { useState, useCallback, useRef, useEffect } from 'react';
 import { Document, Page, pdfjs } from 'react-pdf';
 import 'react-pdf/dist/Page/TextLayer.css';
 import 'react-pdf/dist/Page/AnnotationLayer.css';
-import { X, FileText, Search, ChevronLeft, ChevronRight, ZoomIn, ZoomOut, FileCode } from 'lucide-react';
+import { X, FileText, Search, ChevronLeft, ChevronRight, ZoomIn, ZoomOut, FileCode, CheckCircle2, Sparkles } from 'lucide-react';
 
 // Configure PDF.js worker (CDN)
 pdfjs.GlobalWorkerOptions.workerSrc = `https://unpkg.com/pdfjs-dist@${pdfjs.version}/build/pdf.worker.min.mjs`;
 
 // ─── Helpers ────────────────────────────────────────────────────────────────
 
-/** Returns true if the filename looks like a PDF */
 function isPdfFile(fileName) {
   if (!fileName) return false;
   return fileName.toLowerCase().endsWith('.pdf');
 }
 
-/** Returns true if the filename is a plain-text file */
 function isTextFile(fileName) {
   if (!fileName) return false;
   const ext = fileName.toLowerCase().split('.').pop();
   return ['txt', 'text', 'md', 'csv', 'log'].includes(ext);
 }
 
-/** Decode base64 → UTF-8 string (safe for large files) */
 function decodeBase64ToText(b64) {
   try {
     const binary = atob(b64);
@@ -34,43 +31,110 @@ function decodeBase64ToText(b64) {
   }
 }
 
-/** Extract clean keyword from AI reference string */
-function extractSearchKeyword(reference) {
-  if (!reference || typeof reference !== 'string') return '';
-  const quotedMatch = reference.match(/"([^"]{10,})"/);
-  if (quotedMatch) return quotedMatch[1].trim();
+/**
+ * Extracts ALL search keywords/phrases from an AI reference string.
+ * Captures all quoted excerpts ("...") or sentence blocks without artificial slicing.
+ */
+function extractSearchKeywords(reference) {
+  if (!reference || typeof reference !== 'string') return [];
+
+  const results = [];
+
+  // 1. Extract ALL quoted strings: "..." or “...”
+  const quoteRegex = /["“]([^"”]{8,})["”]/g;
+  let match;
+  while ((match = quoteRegex.exec(reference)) !== null) {
+    const q = match[1].trim();
+    if (q.length >= 6) {
+      results.push(q);
+    }
+  }
+
+  if (results.length > 0) {
+    return results;
+  }
+
+  // 2. Fallback: strip line numbers like [L14]-[L16]: or Lines 4-7:
   const stripped = reference
     .replace(/^\[?[Ll]\d+\]?(?:\s*[-\u2013]\s*\[?[Ll]\d+\]?)?\s*:?\s*/i, '')
     .replace(/^[Ll]ines?\s+\d+(?:\s*[-\u2013]\s*\d+)?\s*:?\s*/i, '')
     .replace(/^[Ll]\d+\s*:?\s*/i, '')
     .trim();
-  return stripped.slice(0, 80).trim();
+
+  if (!stripped) return [];
+
+  // Split by sentence boundaries (.!? followed by whitespace)
+  const sentences = stripped
+    .split(/(?<=[.!?])\s+|\n+/)
+    .map(s => s.trim())
+    .filter(s => s.length >= 6);
+
+  return sentences.length > 0 ? sentences : [stripped];
 }
 
-/** Normalise for fuzzy matching */
+/** Normalise string for fuzzy matching */
 function normalise(s) {
-  return (s || '').toLowerCase().replace(/\s+/g, ' ').replace(/[\u201c\u201d\u2018\u2019]/g, '"').trim();
+  return (s || '')
+    .toLowerCase()
+    .replace(/\s+/g, ' ')
+    .replace(/[\u201c\u201d\u2018\u2019"']/g, '')
+    .trim();
 }
 
-// ─── Nav button (light theme) ────────────────────────────────────────────────
+/**
+ * Breaks keywords into overlapping search snippets (including 3-4 word n-grams)
+ * so every text span across multi-span sentences gets matched and highlighted.
+ */
+function getSnippetsFromKeywords(keywords) {
+  if (!keywords || !keywords.length) return [];
+  const snippets = new Set();
+
+  keywords.forEach(kw => {
+    const norm = normalise(kw);
+    if (!norm) return;
+
+    if (norm.length <= 40) {
+      snippets.add(norm);
+    } else {
+      snippets.add(norm.slice(0, 35));
+    }
+
+    const words = norm.split(' ').filter(Boolean);
+    for (let i = 0; i < words.length; i++) {
+      const chunk3 = words.slice(i, i + 3).join(' ');
+      if (chunk3.length >= 8) {
+        snippets.add(chunk3);
+      }
+      const chunk4 = words.slice(i, i + 4).join(' ');
+      if (chunk4.length >= 10) {
+        snippets.add(chunk4);
+      }
+    }
+  });
+
+  return Array.from(snippets);
+}
+
+/** Nav button style matching main app pills */
 function navBtnStyle(disabled) {
   return {
     background: disabled ? '#f1f5f9' : '#ffffff',
     border: `1px solid ${disabled ? '#e2e8f0' : '#cbd5e1'}`,
-    color: disabled ? '#cbd5e1' : '#475569',
+    color: disabled ? '#cbd5e1' : '#334155',
     borderRadius: '6px',
-    padding: '5px',
+    padding: '4px 8px',
     cursor: disabled ? 'not-allowed' : 'pointer',
     display: 'flex',
     alignItems: 'center',
     justifyContent: 'center',
-    opacity: disabled ? 0.6 : 1,
-    boxShadow: disabled ? 'none' : '0 1px 3px rgba(0,0,0,0.06)',
+    opacity: disabled ? 0.5 : 1,
+    boxShadow: disabled ? 'none' : '0 1px 2px rgba(0,0,0,0.05)',
+    transition: 'all 0.15s ease',
   };
 }
 
 // ─── Plain-text viewer ────────────────────────────────────────────────────────
-function TextViewer({ fileBase64, keyword }) {
+function TextViewer({ fileBase64, keywords }) {
   const [text, setText] = useState('');
   const containerRef = useRef(null);
 
@@ -79,33 +143,57 @@ function TextViewer({ fileBase64, keyword }) {
   }, [fileBase64]);
 
   useEffect(() => {
-    if (!text || !keyword || !containerRef.current) return;
+    if (!text || !keywords.length || !containerRef.current) return;
     const highlights = containerRef.current.querySelectorAll('.txt-highlight');
-    if (highlights.length > 0) highlights[0].scrollIntoView({ behavior: 'smooth', block: 'center' });
-  }, [text, keyword]);
+    if (highlights.length > 0) {
+      highlights[0].scrollIntoView({ behavior: 'smooth', block: 'center' });
+    }
+  }, [text, keywords]);
 
   if (!text) {
     return <div style={{ color: '#94a3b8', fontSize: '13px', marginTop: '60px', textAlign: 'center' }}>Loading text…</div>;
   }
 
-  const normKw = normalise(keyword).slice(0, 40);
+  const normSnippets = getSnippetsFromKeywords(keywords);
   const lines = text.split('\n');
 
   return (
-    <div ref={containerRef} style={{ fontFamily: '"Courier New", Courier, monospace', fontSize: '13px', lineHeight: '1.75', color: '#1e293b', whiteSpace: 'pre-wrap', wordBreak: 'break-word', width: '100%', maxWidth: '760px' }}>
+    <div
+      ref={containerRef}
+      style={{
+        fontFamily: '"JetBrains Mono", "Cascadia Code", "Courier New", monospace',
+        fontSize: '13px',
+        lineHeight: '1.8',
+        color: '#1e293b',
+        whiteSpace: 'pre-wrap',
+        wordBreak: 'break-word',
+        width: '100%',
+        maxWidth: '780px',
+      }}
+    >
       {lines.map((line, i) => {
-        const isMatch = normKw && normalise(line).includes(normKw);
+        const normLine = normalise(line);
+        const isMatch = normSnippets.some(snip => snip && (normLine.includes(snip) || (normLine.length >= 8 && snip.includes(normLine))));
+
         return (
-          <div key={i} className={isMatch ? 'txt-highlight' : ''} style={{
-            display: 'flex', gap: '14px', padding: '2px 10px',
-            borderRadius: isMatch ? '5px' : '0',
-            background: isMatch ? 'rgba(251,191,36,0.2)' : (i % 2 === 0 ? '#f8fafc' : '#ffffff'),
-            outline: isMatch ? '1.5px solid rgba(245,158,11,0.45)' : 'none',
-          }}>
-            <span style={{ color: '#b0bec5', userSelect: 'none', minWidth: '36px', textAlign: 'right', flexShrink: 0, fontSize: '11.5px', paddingTop: '1px' }}>
+          <div
+            key={i}
+            className={isMatch ? 'txt-highlight' : ''}
+            style={{
+              display: 'flex',
+              gap: '14px',
+              padding: '3px 12px',
+              borderRadius: isMatch ? '6px' : '0',
+              background: isMatch ? '#fef08a' : (i % 2 === 0 ? '#f8fafc' : '#ffffff'),
+              borderLeft: isMatch ? '4px solid #f59e0b' : '4px solid transparent',
+              boxShadow: isMatch ? '0 1px 4px rgba(245,158,11,0.15)' : 'none',
+              transition: 'all 0.15s ease',
+            }}
+          >
+            <span style={{ color: '#94a3b8', userSelect: 'none', minWidth: '36px', textAlign: 'right', flexShrink: 0, fontSize: '11.5px', paddingTop: '1px' }}>
               {i + 1}
             </span>
-            <span style={{ color: isMatch ? '#92400e' : '#334155', fontWeight: isMatch ? 600 : 400 }}>
+            <span style={{ color: isMatch ? '#713f12' : '#334155', fontWeight: isMatch ? 700 : 400 }}>
               {line || '\u00a0'}
             </span>
           </div>
@@ -119,12 +207,11 @@ function TextViewer({ fileBase64, keyword }) {
 export default function PdfHighlightViewer({ fileBase64, fileName, reference, onClose }) {
   const [numPages, setNumPages] = useState(null);
   const [currentPage, setCurrentPage] = useState(1);
-  const [scale, setScale] = useState(1.3);
+  const [scale, setScale] = useState(1.25);
   const [matchPage, setMatchPage] = useState(null);
   const [pdfError, setPdfError] = useState(null);
 
-  const keyword = extractSearchKeyword(reference);
-  const normKeyword = normalise(keyword);
+  const keywords = extractSearchKeywords(reference);
   const pageRefs = useRef({});
   const matchFoundRef = useRef(false);
 
@@ -132,46 +219,64 @@ export default function PdfHighlightViewer({ fileBase64, fileName, reference, on
   const pdfDataUri = fileBase64 ? `data:application/pdf;base64,${fileBase64}` : null;
 
   const onDocumentLoadSuccess = useCallback(({ numPages: n }) => {
-    setNumPages(n); matchFoundRef.current = false; setMatchPage(null); setPdfError(null);
+    setNumPages(n);
+    matchFoundRef.current = false;
+    setMatchPage(null);
+    setPdfError(null);
   }, []);
 
   const onDocumentLoadError = useCallback((err) => {
     setPdfError(err?.message || 'Invalid PDF structure.');
   }, []);
 
+  /** Multi-sentence highlight scanner using n-grams */
   const onPageLoadSuccess = useCallback((pageNum) => {
-    if (!normKeyword) return;
+    if (!keywords.length) return;
+    const normSnippets = getSnippetsFromKeywords(keywords);
+    if (!normSnippets.length) return;
+
     setTimeout(() => {
       const container = pageRefs.current[pageNum];
       if (!container) return;
       const spans = container.querySelectorAll('.react-pdf__Page__textContent span');
-      const snippet = normKeyword.slice(0, 30);
-      if (!snippet) return;
-      let found = false;
+      let foundOnPage = false;
+
       spans.forEach(span => {
-        if (normalise(span.textContent).includes(snippet)) {
-          span.style.backgroundColor = 'rgba(251,191,36,0.45)';
-          span.style.borderRadius = '2px';
-          span.style.outline = '2px solid rgba(245,158,11,0.7)';
-          found = true;
+        const spanText = normalise(span.textContent);
+        if (!spanText) return;
+
+        const isMatch = normSnippets.some(snip =>
+          spanText.includes(snip) || (spanText.length >= 8 && snip.includes(spanText))
+        );
+
+        if (isMatch) {
+          span.style.backgroundColor = 'rgba(254, 240, 138, 0.9)'; // bright yellow highlighter
+          span.style.color = '#713f12';
+          span.style.borderRadius = '3px';
+          span.style.borderBottom = '2px solid #f59e0b';
+          span.style.boxShadow = '0 1px 4px rgba(245,158,11,0.2)';
+          foundOnPage = true;
         }
       });
-      if (found && !matchFoundRef.current) {
-        matchFoundRef.current = true; setMatchPage(pageNum); setCurrentPage(pageNum);
+
+      if (foundOnPage && !matchFoundRef.current) {
+        matchFoundRef.current = true;
+        setMatchPage(pageNum);
+        setCurrentPage(pageNum);
       }
     }, 200);
-  }, [normKeyword]);
+  }, [keywords]);
 
   const goToPrev = () => setCurrentPage(p => Math.max(1, p - 1));
   const goToNext = () => setCurrentPage(p => Math.min(numPages || 1, p + 1));
-  const zoomIn  = () => setScale(s => Math.min(2.5, parseFloat((s + 0.2).toFixed(1))));
-  const zoomOut = () => setScale(s => Math.max(0.6, parseFloat((s - 0.2).toFixed(1))));
+  const zoomIn  = () => setScale(s => Math.min(2.5, parseFloat((s + 0.15).toFixed(2))));
+  const zoomOut = () => setScale(s => Math.max(0.6, parseFloat((s - 0.15).toFixed(2))));
 
   if (!fileBase64) return null;
 
   if (fileType === 'unsupported') {
     return (
-      <ModalShell fileName={fileName} keyword={keyword} onClose={onClose} footerText="Preview not available for this file type.">
+      <ModalShell fileName={fileName} keywords={keywords} onClose={onClose} footerText="Preview not available for this file type.">
         <div style={{ color: '#94a3b8', fontSize: '13.5px', textAlign: 'center', marginTop: '60px', lineHeight: 1.8, flex: 1 }}>
           <FileCode size={36} style={{ marginBottom: '12px', opacity: 0.35 }} /><br />
           Preview is not supported for <strong style={{ color: '#334155' }}>{fileName}</strong>.
@@ -182,12 +287,15 @@ export default function PdfHighlightViewer({ fileBase64, fileName, reference, on
 
   if (fileType === 'text') {
     return (
-      <ModalShell fileName={fileName} keyword={keyword} onClose={onClose}
-        footerText={keyword ? `Highlighted lines match: "${keyword.slice(0, 60)}${keyword.length > 60 ? '…' : ''}"` : 'Text file viewer'}
-        footerHighlight
+      <ModalShell
+        fileName={fileName}
+        keywords={keywords}
+        onClose={onClose}
+        footerText={keywords.length ? `Highlighted ${keywords.length} reference excerpt(s) in document` : 'Text file viewer'}
+        footerHighlight={keywords.length > 0}
       >
-        <div style={{ flex: 1, overflowY: 'auto', padding: '16px 20px', background: '#f8fafc', display: 'flex', justifyContent: 'center' }}>
-          <TextViewer fileBase64={fileBase64} keyword={keyword} />
+        <div style={{ flex: 1, overflowY: 'auto', padding: '20px 24px', background: '#f1f5fb', display: 'flex', justifyContent: 'center' }}>
+          <TextViewer fileBase64={fileBase64} keywords={keywords} />
         </div>
       </ModalShell>
     );
@@ -195,15 +303,23 @@ export default function PdfHighlightViewer({ fileBase64, fileName, reference, on
 
   // PDF
   return (
-    <ModalShell fileName={fileName} keyword={keyword} onClose={onClose}
-      numPages={numPages} currentPage={currentPage}
-      goToPrev={goToPrev} goToNext={goToNext}
-      scale={scale} zoomIn={zoomIn} zoomOut={zoomOut}
-      matchPage={matchPage} onJumpToMatch={() => setCurrentPage(matchPage)}
-      footerText={matchPage ? `Match found on page ${matchPage}. Highlighted in yellow.` : numPages ? 'Scanning pages for matching text…' : 'Loading PDF…'}
+    <ModalShell
+      fileName={fileName}
+      keywords={keywords}
+      onClose={onClose}
+      numPages={numPages}
+      currentPage={currentPage}
+      goToPrev={goToPrev}
+      goToNext={goToNext}
+      scale={scale}
+      zoomIn={zoomIn}
+      zoomOut={zoomOut}
+      matchPage={matchPage}
+      onJumpToMatch={() => setCurrentPage(matchPage)}
+      footerText={matchPage ? `Matching reference excerpt(s) highlighted on Page ${matchPage}` : numPages ? 'Scanning pages for matching text…' : 'Loading PDF…'}
       footerHighlight={!!matchPage}
     >
-      <div style={{ flex: 1, overflowY: 'auto', display: 'flex', flexDirection: 'column', alignItems: 'center', padding: '20px 16px', gap: '12px', background: '#f1f5f9' }}>
+      <div style={{ flex: 1, overflowY: 'auto', display: 'flex', flexDirection: 'column', alignItems: 'center', padding: '24px 16px', gap: '16px', background: '#f1f5fb' }}>
         {pdfError ? (
           <div style={{ color: '#dc2626', fontSize: '13px', marginTop: '60px', textAlign: 'center', lineHeight: 1.7 }}>
             <FileText size={32} style={{ marginBottom: '10px', opacity: 0.4 }} /><br />
@@ -212,17 +328,31 @@ export default function PdfHighlightViewer({ fileBase64, fileName, reference, on
           </div>
         ) : (
           <Document file={pdfDataUri} onLoadSuccess={onDocumentLoadSuccess} onLoadError={onDocumentLoadError}
-            loading={<div style={{ color: '#94a3b8', fontSize: '13px', marginTop: '60px' }}>Loading PDF…</div>}
+            loading={<div style={{ color: '#64748b', fontSize: '13px', marginTop: '60px' }}>Loading PDF…</div>}
           >
             {numPages && Array.from({ length: numPages }, (_, i) => i + 1).map(pageNum => (
-              <div key={pageNum} ref={el => { pageRefs.current[pageNum] = el; }} style={{
-                marginBottom: '12px',
-                boxShadow: pageNum === matchPage ? '0 0 0 3px rgba(245,158,11,0.45), 0 4px 16px rgba(0,0,0,0.1)' : '0 2px 8px rgba(0,0,0,0.08)',
-                borderRadius: '6px', overflow: 'hidden',
-                border: `2px solid ${pageNum === matchPage ? 'rgba(245,158,11,0.4)' : 'transparent'}`,
-                transition: 'border-color 0.3s',
-              }}>
-                <Page pageNumber={pageNum} scale={scale} renderTextLayer={true} renderAnnotationLayer={false} onLoadSuccess={() => onPageLoadSuccess(pageNum)} />
+              <div
+                key={pageNum}
+                ref={el => { pageRefs.current[pageNum] = el; }}
+                style={{
+                  marginBottom: '16px',
+                  boxShadow: pageNum === matchPage
+                    ? '0 0 0 3px #3b82f6, 0 12px 36px -4px rgba(15,23,42,0.15)'
+                    : '0 8px 24px -4px rgba(15,23,42,0.08)',
+                  borderRadius: '8px',
+                  overflow: 'hidden',
+                  border: `2px solid ${pageNum === matchPage ? '#2563eb' : '#e2e8f0'}`,
+                  transition: 'all 0.3s ease',
+                  background: '#ffffff',
+                }}
+              >
+                <Page
+                  pageNumber={pageNum}
+                  scale={scale}
+                  renderTextLayer={true}
+                  renderAnnotationLayer={false}
+                  onLoadSuccess={() => onPageLoadSuccess(pageNum)}
+                />
               </div>
             ))}
           </Document>
@@ -232,94 +362,155 @@ export default function PdfHighlightViewer({ fileBase64, fileName, reference, on
   );
 }
 
-// ─── Shared modal shell ───────────────────────────────────────────────────────
-function ModalShell({ fileName, keyword, onClose, children, numPages, currentPage, goToPrev, goToNext, scale, zoomIn, zoomOut, matchPage, onJumpToMatch, footerText, footerHighlight }) {
-  const footerBg = footerHighlight ? '#fffbeb' : '#f8fafc';
-  const footerBorder = footerHighlight ? '#fde68a' : '#e2e8f0';
-  const footerColor = footerHighlight ? '#b45309' : '#64748b';
-
+// ─── Shared modal shell (Matching Main App UI) ───────────────────────────────
+function ModalShell({
+  fileName, keywords = [], onClose, children,
+  numPages, currentPage, goToPrev, goToNext, scale, zoomIn, zoomOut,
+  matchPage, onJumpToMatch,
+  footerText, footerHighlight
+}) {
   return (
     <div style={{
       position: 'fixed', inset: 0,
-      backgroundColor: 'rgba(15,23,42,0.5)',
-      backdropFilter: 'blur(8px)', WebkitBackdropFilter: 'blur(8px)',
+      backgroundColor: 'rgba(15, 23, 42, 0.45)',
+      backdropFilter: 'blur(8px)',
+      WebkitBackdropFilter: 'blur(8px)',
       display: 'flex', alignItems: 'center', justifyContent: 'center',
       zIndex: 3500,
+      padding: '20px',
     }}>
       <div style={{
-        backgroundColor: '#ffffff', borderRadius: '18px',
+        backgroundColor: '#ffffff',
+        borderRadius: '16px',
         display: 'flex', flexDirection: 'column',
-        width: '90vw', maxWidth: '860px', height: '90vh',
+        width: '100%', maxWidth: '920px', height: '90vh',
         overflow: 'hidden',
-        boxShadow: '0 24px 64px rgba(15,23,42,0.18), 0 4px 16px rgba(15,23,42,0.06)',
+        boxShadow: '0 25px 60px -15px rgba(15, 23, 42, 0.25), 0 0 0 1px rgba(15, 23, 42, 0.08)',
         border: '1px solid #e2e8f0',
       }}>
 
-        {/* TOOLBAR — navy gradient to match app header */}
+        {/* ── MODAL HEADER ── */}
         <div style={{
-          display: 'flex', alignItems: 'center', gap: '10px',
-          padding: '13px 18px',
-          background: 'linear-gradient(135deg, #0b3b60 0%, #1e4d7a 100%)',
-          flexShrink: 0, flexWrap: 'wrap',
+          display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+          padding: '14px 20px',
+          background: '#ffffff',
+          borderBottom: '1px solid #e2e8f0',
+          flexShrink: 0, gap: '16px', flexWrap: 'wrap',
         }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: '10px', flex: 1, minWidth: 0 }}>
-            <div style={{ background: 'rgba(255,255,255,0.15)', borderRadius: '8px', padding: '7px', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0, border: '1px solid rgba(255,255,255,0.2)' }}>
-              <FileText size={14} color="#ffffff" />
+          {/* File Title & Info */}
+          <div style={{ display: 'flex', alignItems: 'center', gap: '12px', minWidth: 0 }}>
+            <div style={{
+              background: '#eff6ff', border: '1px solid #bfdbfe',
+              borderRadius: '10px', padding: '8px',
+              display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0,
+            }}>
+              <FileText size={18} color="#2563eb" />
             </div>
             <div style={{ minWidth: 0 }}>
-              <div style={{ fontSize: '13.5px', fontWeight: 700, color: '#ffffff', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
-                {fileName || 'Document'}
+              <div style={{ fontSize: '14.5px', fontWeight: 800, color: '#0f172a', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                {fileName || 'Document Viewer'}
               </div>
-              {keyword && (
-                <div style={{ fontSize: '11px', color: 'rgba(255,255,255,0.7)', display: 'flex', alignItems: 'center', gap: '4px', marginTop: '2px' }}>
-                  <Search size={10} />
-                  <span style={{ color: '#fcd34d', fontWeight: 600 }}>"{keyword.slice(0, 55)}{keyword.length > 55 ? '…' : ''}"</span>
+              {keywords.length > 0 && (
+                <div style={{ display: 'flex', alignItems: 'center', gap: '6px', marginTop: '2px' }}>
+                  <span style={{
+                    display: 'inline-flex', alignItems: 'center', gap: '4px',
+                    fontSize: '11px', fontWeight: 600, color: '#166534',
+                    background: '#f0fdf4', border: '1px solid #bbf7d0',
+                    padding: '2px 8px', borderRadius: '12px'
+                  }}>
+                    <Sparkles size={11} color="#16a34a" />
+                    Highlighting {keywords.length} reference excerpt{keywords.length > 1 ? 's' : ''}
+                  </span>
                 </div>
               )}
             </div>
           </div>
 
-          {numPages != null && (
-            <>
-              <div style={{ display: 'flex', alignItems: 'center', gap: '5px' }}>
-                <button onClick={goToPrev} disabled={currentPage <= 1} style={navBtnStyle(currentPage <= 1)}><ChevronLeft size={14} /></button>
-                <span style={{ fontSize: '12px', color: '#ffffff', fontWeight: 600, minWidth: '64px', textAlign: 'center' }}>{currentPage} / {numPages}</span>
-                <button onClick={goToNext} disabled={currentPage >= numPages} style={navBtnStyle(currentPage >= numPages)}><ChevronRight size={14} /></button>
+          {/* Right Toolbar Controls */}
+          <div style={{ display: 'flex', alignItems: 'center', gap: '10px', flexShrink: 0 }}>
+            {/* Page navigation */}
+            {numPages != null && (
+              <div style={{ display: 'flex', alignItems: 'center', gap: '4px', background: '#f8fafc', padding: '3px 6px', borderRadius: '8px', border: '1px solid #e2e8f0' }}>
+                <button onClick={goToPrev} disabled={currentPage <= 1} style={navBtnStyle(currentPage <= 1)} title="Previous page">
+                  <ChevronLeft size={14} />
+                </button>
+                <span style={{ fontSize: '12px', color: '#0f172a', fontWeight: 700, minWidth: '55px', textAlign: 'center' }}>
+                  {currentPage} / {numPages}
+                </span>
+                <button onClick={goToNext} disabled={currentPage >= numPages} style={navBtnStyle(currentPage >= numPages)} title="Next page">
+                  <ChevronRight size={14} />
+                </button>
               </div>
-              <div style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
+            )}
+
+            {/* Zoom controls */}
+            {numPages != null && (
+              <div style={{ display: 'flex', alignItems: 'center', gap: '4px', background: '#f8fafc', padding: '3px 6px', borderRadius: '8px', border: '1px solid #e2e8f0' }}>
                 <button onClick={zoomOut} style={navBtnStyle(scale <= 0.6)} title="Zoom out"><ZoomOut size={13} /></button>
-                <span style={{ fontSize: '11px', color: 'rgba(255,255,255,0.8)', minWidth: '36px', textAlign: 'center' }}>{Math.round(scale * 100)}%</span>
+                <span style={{ fontSize: '11.5px', color: '#475569', fontWeight: 700, minWidth: '42px', textAlign: 'center' }}>
+                  {Math.round(scale * 100)}%
+                </span>
                 <button onClick={zoomIn} style={navBtnStyle(scale >= 2.5)} title="Zoom in"><ZoomIn size={13} /></button>
               </div>
-              {matchPage && matchPage !== currentPage && (
-                <button onClick={onJumpToMatch} style={{ background: 'rgba(251,191,36,0.2)', border: '1px solid rgba(251,191,36,0.5)', color: '#fcd34d', padding: '5px 10px', borderRadius: '6px', fontSize: '11px', fontWeight: 700, cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '4px' }}>
-                  <Search size={11} /> Jump to match (p.{matchPage})
-                </button>
-              )}
-            </>
-          )}
+            )}
 
-          <button onClick={onClose} style={{ background: 'rgba(255,255,255,0.12)', border: '1px solid rgba(255,255,255,0.22)', color: '#ffffff', borderRadius: '8px', padding: '7px', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-            <X size={16} />
-          </button>
+            {/* Jump to match button */}
+            {matchPage && matchPage !== currentPage && (
+              <button
+                onClick={onJumpToMatch}
+                style={{
+                  background: '#2563eb',
+                  border: 'none',
+                  color: '#ffffff',
+                  padding: '6px 12px', borderRadius: '8px',
+                  fontSize: '12px', fontWeight: 700, cursor: 'pointer',
+                  display: 'flex', alignItems: 'center', gap: '5px',
+                  boxShadow: '0 2px 6px rgba(37,99,235,0.3)',
+                  transition: 'all 0.15s ease',
+                }}
+              >
+                <Search size={12} />
+                Jump to match (p.{matchPage})
+              </button>
+            )}
+
+            {/* Close button */}
+            <button
+              onClick={onClose}
+              title="Close viewer"
+              style={{
+                background: '#f1f5f9',
+                border: '1px solid #e2e8f0',
+                color: '#475569',
+                borderRadius: '50%',
+                width: '32px', height: '32px',
+                cursor: 'pointer',
+                display: 'flex', alignItems: 'center', justifyContent: 'center',
+                transition: 'all 0.15s ease',
+              }}
+            >
+              <X size={16} />
+            </button>
+          </div>
         </div>
 
-        {/* CONTENT AREA */}
+        {/* ── CONTENT AREA ── */}
         {children}
 
-        {/* FOOTER */}
+        {/* ── MODAL FOOTER ── */}
         <div style={{
-          padding: '9px 18px',
-          background: footerBg,
-          borderTop: `1px solid ${footerBorder}`,
-          fontSize: '11.5px',
-          color: footerColor,
-          display: 'flex', alignItems: 'center', gap: '6px',
-          flexShrink: 0, fontWeight: 500,
+          padding: '10px 20px',
+          background: footerHighlight ? '#f0fdf4' : '#ffffff',
+          borderTop: `1px solid ${footerHighlight ? '#bbf7d0' : '#e2e8f0'}`,
+          fontSize: '12px',
+          color: footerHighlight ? '#166534' : '#64748b',
+          display: 'flex', alignItems: 'center', gap: '8px',
+          flexShrink: 0, fontWeight: 600,
         }}>
-          <Search size={11} />
+          <CheckCircle2 size={15} color={footerHighlight ? '#16a34a' : '#94a3b8'} />
           {footerText}
         </div>
+
       </div>
     </div>
   );

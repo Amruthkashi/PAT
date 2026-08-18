@@ -63,6 +63,71 @@ const renderFormattedText = (text) => {
   );
 };
 
+/**
+ * Parses a reference string into an array of individual citation points.
+ * Automatically splits multiple quoted excerpts ("...") or line breaks into clean point-by-point items.
+ */
+const parseReferencePoints = (reference) => {
+  if (!reference || typeof reference !== 'string') return [];
+
+  const quoteRegex = /["“]([^"”]{5,})["”]/g;
+  const quotes = [];
+  let match;
+  while ((match = quoteRegex.exec(reference)) !== null) {
+    const q = match[1].trim();
+    if (q) quotes.push(`"${q}"`);
+  }
+
+  if (quotes.length >= 2) {
+    return quotes;
+  }
+
+  const lines = reference
+    .split(/\n+/)
+    .map(l => l.trim())
+    .filter(l => l.length > 0);
+
+  if (lines.length >= 2) {
+    return lines;
+  }
+
+  return [reference.trim()];
+};
+
+/**
+ * Renders reference text. If multiple quotes/sentences are present, renders them point-by-point (①, ②).
+ */
+const renderReferenceContent = (reference) => {
+  const points = parseReferencePoints(reference);
+  if (points.length >= 2) {
+    return (
+      <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', marginTop: '6px' }}>
+        {points.map((pt, idx) => (
+          <div key={idx} style={{ display: 'flex', gap: '8px', alignItems: 'flex-start', fontSize: '12.5px', lineHeight: '1.65', color: '#1e293b' }}>
+            <span style={{
+              display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
+              minWidth: '20px', height: '20px', borderRadius: '50%',
+              background: '#dcfce7', border: '1px solid #86efac',
+              color: '#15803d', fontSize: '11px', fontWeight: 800,
+              flexShrink: 0, marginTop: '2px'
+            }}>
+              {idx + 1}
+            </span>
+            <div style={{ flex: 1, background: '#ffffff', borderRadius: '6px', padding: '6px 10px', border: '1px solid #dcfce7' }}>
+              {renderFormattedText(pt)}
+            </div>
+          </div>
+        ))}
+      </div>
+    );
+  }
+  return (
+    <div style={{ fontSize: '12.5px', lineHeight: '1.65', color: '#1e293b', whiteSpace: 'pre-line' }}>
+      {renderFormattedText(reference)}
+    </div>
+  );
+};
+
 export default function AssessmentPage({ user, onLogout }) {
   // 4 Steps: 'ASSESSMENT' | 'UPLOAD_DOCUMENTS' | 'REVIEW_OBSERVATIONS' | 'ACTION_PLAN'
   const [currentStep, setCurrentStep] = useState('ASSESSMENT');
@@ -1233,9 +1298,7 @@ export default function AssessmentPage({ user, onLogout }) {
                                         <Quote size={14} />
                                         Document Reference &amp; Citation
                                       </div>
-                                      <div style={{ fontSize: '12.5px', lineHeight: '1.65', color: '#1e293b', whiteSpace: 'pre-line' }}>
-                                        {renderFormattedText(entry.reference)}
-                                      </div>
+                                      {renderReferenceContent(entry.reference)}
                                       {/* View in File button — opens PDF with highlight */}
                                       {uploaded?.fileBase64 && (
                                         <div style={{ marginTop: '10px', display: 'flex', justifyContent: 'flex-end' }}>
