@@ -1014,14 +1014,105 @@ export default function AssessmentPage({ user, onLogout }) {
       )}
 
       {/* STEP 3: REVIEW OBSERVATIONS VIEW */}
-      {currentStep === 'REVIEW_OBSERVATIONS' && (
+      {currentStep === 'REVIEW_OBSERVATIONS' && (() => {
+        // ── Compute global stats across all components ──────────────────────
+        let totalQ = 0, totalAgree = 0, totalPartial = 0, totalMissing = 0, totalNoDoc = 0;
+        Object.keys(QUESTIONS_BY_SECTION).forEach((sk) => {
+          QUESTIONS_BY_SECTION[sk].items.forEach((it) => {
+            const up = uploadedDocs[it.id];
+            if (!up) { totalNoDoc++; return; }
+            const obs = (() => {
+              const ao = aiObservations;
+              if (!ao || typeof ao !== 'object') return null;
+              if (ao[it.id] && typeof ao[it.id] === 'object') return ao[it.id];
+              const lk = it.id.toLowerCase();
+              const mk = Object.keys(ao).find(k => k.toLowerCase() === lk);
+              return mk ? ao[mk] : null;
+            })();
+            if (!obs) return;
+            Object.values(obs).forEach((val) => {
+              if (!val || typeof val !== 'object') return;
+              const f = String(val.AI_finding || val.ai_finding || val.finding || '').trim().toLowerCase();
+              if (!f) return;
+              totalQ++;
+              if (f === 'agree' || f.includes('supported') || f.includes('full') || f === 'yes') totalAgree++;
+              else if (f === 'partial' || f.includes('partially') || f.includes('part')) totalPartial++;
+              else totalMissing++;
+            });
+          });
+        });
+        const totalAnswered = totalAgree + totalPartial + totalMissing;
+        const overallPct = totalAnswered > 0 ? Math.round((totalAgree / totalAnswered) * 100) : 0;
+
+        let globalCardIdx = 0;
+        return (
         <main className="review-obs-container">
+          {/* ── GLOBAL STATS BANNER ── */}
+          <div className="obs-stats-banner">
+            <div className="obs-stats-banner-left">
+              <div className="obs-stats-banner-title">Assessment Overview</div>
+              <div className="obs-stats-banner-sub">AI evaluation results across all policy components</div>
+            </div>
+            <div className="obs-stats-pills">
+              <div className="obs-stat-chip obs-stat-chip-agree">
+                <span className="obs-stat-chip-icon">✓</span>
+                <div>
+                  <div className="obs-stat-chip-num">{totalAgree}</div>
+                  <div className="obs-stat-chip-label">Agree</div>
+                </div>
+              </div>
+              <div className="obs-stat-chip obs-stat-chip-partial">
+                <span className="obs-stat-chip-icon">◐</span>
+                <div>
+                  <div className="obs-stat-chip-num">{totalPartial}</div>
+                  <div className="obs-stat-chip-label">Partial</div>
+                </div>
+              </div>
+              <div className="obs-stat-chip obs-stat-chip-missing">
+                <span className="obs-stat-chip-icon">✗</span>
+                <div>
+                  <div className="obs-stat-chip-num">{totalMissing}</div>
+                  <div className="obs-stat-chip-label">Missing</div>
+                </div>
+              </div>
+              <div className="obs-stat-chip obs-stat-chip-score">
+                <div className="obs-stat-score-ring">
+                  <svg viewBox="0 0 36 36" width="32" height="32" style={{ transform: 'rotate(-90deg)' }}>
+                    <circle cx="18" cy="18" r="15" fill="none" stroke="rgba(255,255,255,0.15)" strokeWidth="3" />
+                    <circle cx="18" cy="18" r="15" fill="none" stroke="#ffffff"
+                      strokeWidth="3" strokeLinecap="round"
+                      strokeDasharray={`${2 * Math.PI * 15}`}
+                      strokeDashoffset={`${2 * Math.PI * 15 * (1 - overallPct / 100)}`}
+                      style={{ transition: 'stroke-dashoffset 1s ease' }}
+                    />
+                  </svg>
+                  <div className="obs-stat-score-center">{overallPct}%</div>
+                </div>
+                <div>
+                  <div className="obs-stat-chip-num" style={{ color: '#fff' }}>Overall</div>
+                  <div className="obs-stat-chip-label" style={{ color: 'rgba(255,255,255,0.7)' }}>Compliance</div>
+                </div>
+              </div>
+            </div>
+          </div>
 
           <div className="obs-list-container">
-            {Object.keys(QUESTIONS_BY_SECTION).map((sectionKey) => {
+            {Object.keys(QUESTIONS_BY_SECTION).map((sectionKey, sIdx) => {
               const section = QUESTIONS_BY_SECTION[sectionKey];
 
-              return section.items.map((item) => {
+              return [
+                // ── Section Divider ──
+                <div key={`sec-${sectionKey}`} className="obs-section-divider">
+                  <div className="obs-section-divider-line" />
+                  <div className="obs-section-divider-chip">
+                    <ClipboardList size={13} />
+                    {section.label || sectionKey}
+                  </div>
+                  <div className="obs-section-divider-line" />
+                </div>,
+                // ── Component Cards ──
+                ...section.items.map((item) => {
+                const cardGroupIdx = (sIdx * 20) + section.items.indexOf(item);
                 const uploaded = uploadedDocs[item.id];
                 const commentText = reviewComments[item.id] || '';
 
@@ -1048,20 +1139,41 @@ export default function AssessmentPage({ user, onLogout }) {
                     .filter(([, val]) => val && typeof val === 'object')
                     .map(([key, val]) => ({
                       key,
-                      question:    val.question    || '',
-                      summary:     val.summary     || '',
-                      observation: val.observation || val.text || '',
-                      aiFinding:   val.AI_finding  || val.ai_finding || val.finding || '',
-                      score:       val.score       || '',
-                      reference:   val.reference   || val.citation   || val.ref || ''
+                      question:           val.question            || '',
+                      summary:            val.summary             || '',
+                      observation:        val.observation         || val.text || '',
+                      // observation_points is the preferred bullet-point array from the AI
+                      observationPoints:  Array.isArray(val.observation_points)
+                                            ? val.observation_points.filter(Boolean)
+                                            : [],
+                      aiFinding:          val.AI_finding          || val.ai_finding || val.finding || '',
+                      aiConfidence:       val.ai_confidence       || val.score || '',
+                      score:              val.ai_confidence       || val.score || '',
+                      reference:          val.reference           || val.citation   || val.ref || '',
+                      // These are AI chain-of-thought fields — intentionally NOT shown to users
+                      // val.requirement_breakdown — hidden
+                      // val.evidence_analysis_and_justification — hidden
                     }))
-                    // Keep any entry that has at least one meaningful field — don't silently drop
-                    .filter(e => e.question || e.observation || e.summary || e.reference || e.aiFinding);
+                    .filter(e => e.question || e.observation || e.observationPoints.length || e.summary || e.reference || e.aiFinding);
                 };
 
                 const questionEntries = buildQuestionEntries(componentObs);
 
                 // ── Badge & Ref helpers ──────────────────────────────────────
+                const getAiBadgeClass = (finding) => {
+                  if (!finding) return 'obs-pill-gray';
+                  const f = String(finding).trim().toLowerCase();
+                  if (f === 'agree' || f.includes('supported') || f.includes('full') || f === 'yes') {
+                    return 'obs-pill-agree';
+                  }
+                  if (f === 'partial' || f.includes('partially') || f.includes('part')) {
+                    return 'obs-pill-partial';
+                  }
+                  if (f === 'missing' || f.includes('missing') || f.includes('not found') || f === 'no' || f === 'absent') {
+                    return 'obs-pill-missing';
+                  }
+                  return 'obs-pill-gray';
+                };
                 const isAgreeFinding = (f) => {
                   if (!f) return false;
                   const s = String(f).trim().toLowerCase();
@@ -1087,328 +1199,410 @@ export default function AssessmentPage({ user, onLogout }) {
                 };
 
 
+                // ── Per-component agreement stats ──────────────────────────
+                const compAgree   = questionEntries.filter(e => getAiBadgeClass(e.aiFinding) === 'obs-pill-agree').length;
+                const compPartial = questionEntries.filter(e => getAiBadgeClass(e.aiFinding) === 'obs-pill-partial').length;
+                const compMissing = questionEntries.filter(e => getAiBadgeClass(e.aiFinding) === 'obs-pill-missing').length;
+                const compTotal   = questionEntries.length;
 
                 return (
-                  <div key={item.id} className="obs-component-block">
+                  <div key={item.id} className="obs-component-block" style={{ animationDelay: `${cardGroupIdx * 0.07}s` }}>
 
-                    {/* ── COMPONENT HEADER ── */}
+                    {/* ── COMPONENT HEADER (dark themed) ── */}
                     <div className="obs-comp-header">
                       <div className="obs-comp-icon-box">
-                        <ShieldCheck size={22} />
-                      </div>
-                      <div style={{ flex: 1 }}>
-                        <div className="obs-comp-title">{item.id}: Component</div>
-                        <div className="obs-comp-subtitle">{item.component}</div>
+                        <ShieldCheck size={20} />
                       </div>
 
-                      {/* Document badge + Delete */}
+                      {/* Title + subtitle — give this more space */}
+                      <div style={{ flex: 1, minWidth: 0 }}>
+                        <div className="obs-comp-title">{item.id}: {item.component}</div>
+                      </div>
+
+                      {/* Compact stats */}
+                      {compTotal > 0 && (
+                        <div className="obs-comp-mini-stats">
+                          {compAgree   > 0 && <span className="obs-comp-stat-dot agree">{compAgree} Agree</span>}
+                          {compPartial > 0 && <span className="obs-comp-stat-dot partial">{compPartial} Partial</span>}
+                          {compMissing > 0 && <span className="obs-comp-stat-dot missing">{compMissing} Missing</span>}
+                        </div>
+                      )}
+
+                      {/* File badge (compact, truncated) + icon-only delete */}
                       {uploaded ? (
-                        <div style={{ display: 'flex', gap: '8px', alignItems: 'center', marginLeft: 'auto', flexShrink: 0 }}>
-                          <span style={{
-                            display: 'inline-flex', alignItems: 'center', gap: '5px',
-                            padding: '5px 12px', borderRadius: '20px',
-                            background: '#eff6ff', border: '1px solid #bfdbfe',
-                            color: '#2563eb', fontSize: '12px', fontWeight: 600
-                          }}>
-                            <Paperclip size={12} />
-                            {uploaded.fileName}
+                        <div style={{ display: 'flex', gap: '6px', alignItems: 'center', flexShrink: 0, maxWidth: '260px' }}>
+                          <span className="obs-comp-file-badge">
+                            <Paperclip size={11} />
+                            <span className="obs-comp-file-name">{uploaded.fileName}</span>
                           </span>
                           <button
                             onClick={() => setDeleteConfirmId(item.id)}
-                            style={{
-                              display: 'inline-flex', alignItems: 'center', gap: '4px',
-                              padding: '5px 12px', borderRadius: '20px',
-                              background: '#fff1f2', border: '1px solid #fecdd3',
-                              color: '#e11d48', fontSize: '12px', fontWeight: 600,
-                              cursor: 'pointer'
-                            }}
+                            className="obs-comp-delete-btn"
+                            title="Remove document"
                           >
-                            <Trash2 size={12} />
-                            Delete
+                            <Trash2 size={13} />
                           </button>
                         </div>
                       ) : (
-                        <span style={{ fontSize: '11.5px', color: '#94a3b8', fontStyle: 'italic', marginLeft: 'auto', flexShrink: 0 }}>
-                          No document uploaded
+                        <span style={{ fontSize: '11px', color: 'rgba(255,255,255,0.4)', fontStyle: 'italic', flexShrink: 0 }}>
+                          No document
                         </span>
                       )}
                     </div>
 
-                    {/* ── TWO-COLUMN BODY ── */}
-                    <div className="obs-content-grid">
-
-                      {/* LEFT: Questions / Observations */}
-                      <div className="obs-main-col">
-                        {!uploaded ? (
-                          <div className="obs-no-doc">
-                            <div className="obs-no-doc-icon"><FileText size={22} /></div>
-                            <div style={{ fontWeight: 700, color: '#6366f1', fontSize: '13px' }}>No document uploaded</div>
-                            <div style={{ fontSize: '12px' }}>Upload a policy document to get AI-powered observations</div>
+                    {/* ── FULL-WIDTH BODY (no grid, no sidebar) ── */}
+                    <div className="obs-main-col">
+                      {!uploaded ? (
+                        <div className="obs-no-doc">
+                          <div className="obs-no-doc-icon"><FileText size={22} /></div>
+                          <div style={{ fontWeight: 700, color: '#6366f1', fontSize: '13px' }}>No document uploaded</div>
+                          <div style={{ fontSize: '12px' }}>Upload a policy document to get AI-powered observations</div>
+                        </div>
+                      ) : questionEntries.length === 0 ? (
+                        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '18px 20px', background: '#f8fafc', borderRadius: '12px', border: '1px solid #e2e8f0' }}>
+                          <div>
+                            <div style={{ fontSize: '13px', fontWeight: 700, color: '#334155' }}>Document uploaded</div>
+                            <div style={{ fontSize: '12px', color: '#64748b', marginTop: '2px' }}>Evaluation pending — run AI Verification to generate observations</div>
                           </div>
-                        ) : questionEntries.length === 0 ? (
-                          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '16px 18px', background: '#f8fafc', borderRadius: '10px', border: '1px solid #e2e8f0' }}>
-                            <div>
-                              <div style={{ fontSize: '13px', fontWeight: 700, color: '#334155' }}>Document uploaded</div>
-                              <div style={{ fontSize: '12px', color: '#64748b', marginTop: '2px' }}>Evaluation pending — run AI Verification to generate observations</div>
-                            </div>
-                            <button
-                              className="primary-btn"
-                              style={{ padding: '7px 14px', fontSize: '12px', whiteSpace: 'nowrap', marginLeft: '16px' }}
-                              onClick={handleProceedToReview}
-                            >
-                              ✨ Run AI Verification
-                            </button>
-                          </div>
-                        ) : (
-                          questionEntries.map((entry, qIdx) => {
-                            const cardKey = `${item.id}__${entry.key}`;
-                            const isExpanded = Boolean(expandedObs[cardKey]);
-                            const isRefExpanded = Boolean(expandedRef[cardKey]);
-                            const agree = isAgreeFinding(entry.aiFinding);
-                            const hasFinding = Boolean(entry.aiFinding);
-                            const hasScore = Boolean(entry.score);
-                            const hasRef = Boolean(entry.reference);
+                          <button
+                            className="primary-btn"
+                            style={{ padding: '7px 14px', fontSize: '12px', whiteSpace: 'nowrap', marginLeft: '16px' }}
+                            onClick={handleProceedToReview}
+                          >
+                            ✨ Run AI Verification
+                          </button>
+                        </div>
+                      ) : (
+                        questionEntries.map((entry, qIdx) => {
+                          const cardKey = `${item.id}__${entry.key}`;
+                          const isExpanded = Boolean(expandedObs[cardKey]);
+                          const isRefExpanded = Boolean(expandedRef[cardKey]);
+                          const hasFinding = Boolean(entry.aiFinding);
+                          const confVal = entry.aiConfidence || entry.ai_confidence || entry.score;
+                          const hasScore = Boolean(confVal);
+                          const hasRef = Boolean(entry.reference);
 
-                            const scoreNum = (() => {
-                              if (!entry.score) return 0;
-                              const n = parseInt(String(entry.score).replace('%', '').trim(), 10);
-                              return isNaN(n) ? 0 : Math.min(100, Math.max(0, n));
-                            })();
+                          const scoreNum = (() => {
+                            if (!confVal) return 0;
+                            const n = parseInt(String(confVal).replace('%', '').trim(), 10);
+                            return isNaN(n) ? 0 : Math.min(100, Math.max(0, n));
+                          })();
 
-                            // Helper to accurately match criteria ID (e.g. 'p2_c2' or 'c2')
-                            const findCriteriaForKey = (criteriaList, key, fallbackIndex) => {
-                              if (!criteriaList || !criteriaList.length) return null;
-                              const kLower = String(key || '').toLowerCase().trim();
+                          // Helper to accurately match criteria ID (e.g. 'p2_c2' or 'c2')
+                          const findCriteriaForKey = (criteriaList, key, fallbackIndex) => {
+                            if (!criteriaList || !criteriaList.length) return null;
+                            const kLower = String(key || '').toLowerCase().trim();
 
-                              // 1. Exact ID match (e.g., 'p2_c1' === 'p2_c1')
-                              let match = criteriaList.find(c => String(c.id).toLowerCase() === kLower);
-                              if (match) return match;
+                            // 1. Exact ID match (e.g., 'p2_c1' === 'p2_c1')
+                            let match = criteriaList.find(c => String(c.id).toLowerCase() === kLower);
+                            if (match) return match;
 
-                              // 2. Ends-with / contains match (e.g., key 'c2' matching 'p2_c2')
-                              match = criteriaList.find(c => {
-                                const cIdLower = String(c.id).toLowerCase();
-                                return cIdLower.endsWith(`_${kLower}`) || cIdLower === kLower || kLower.endsWith(`_${cIdLower}`);
-                              });
-                              if (match) return match;
+                            // 2. Ends-with / contains match (e.g., key 'c2' matching 'p2_c2')
+                            match = criteriaList.find(c => {
+                              const cIdLower = String(c.id).toLowerCase();
+                              return cIdLower.endsWith(`_${kLower}`) || cIdLower === kLower || kLower.endsWith(`_${cIdLower}`);
+                            });
+                            if (match) return match;
 
-                              // 3. Number match (e.g. '2' or 'c2' -> index 1)
-                              const numMatch = kLower.match(/\d+/);
-                              if (numMatch) {
-                                const idx = parseInt(numMatch[0], 10) - 1;
-                                if (idx >= 0 && idx < criteriaList.length) {
-                                  return criteriaList[idx];
-                                }
+                            // 3. Number match (e.g. '2' or 'c2' -> index 1)
+                            const numMatch = kLower.match(/\d+/);
+                            if (numMatch) {
+                              const idx = parseInt(numMatch[0], 10) - 1;
+                              if (idx >= 0 && idx < criteriaList.length) {
+                                return criteriaList[idx];
                               }
+                            }
 
-                              // 4. Fallback to array index
-                              if (typeof fallbackIndex === 'number' && fallbackIndex >= 0 && fallbackIndex < criteriaList.length) {
-                                return criteriaList[fallbackIndex];
-                              }
-                              return null;
-                            };
+                            // 4. Fallback to array index
+                            if (typeof fallbackIndex === 'number' && fallbackIndex >= 0 && fallbackIndex < criteriaList.length) {
+                              return criteriaList[fallbackIndex];
+                            }
+                            return null;
+                          };
 
-                            const matchedCriteria = findCriteriaForKey(item.criteria, entry.key, qIdx);
-                            const criteriaIndex = matchedCriteria ? item.criteria.indexOf(matchedCriteria) : qIdx;
-                            const displayNum = String(criteriaIndex + 1).padStart(2, '0');
+                          const matchedCriteria = findCriteriaForKey(item.criteria, entry.key, qIdx);
+                          const criteriaIndex = matchedCriteria ? item.criteria.indexOf(matchedCriteria) : qIdx;
+                          const displayNum = String(criteriaIndex + 1).padStart(2, '0');
 
-                            const userAnswer = matchedCriteria
-                              ? (sectionStates[sectionKey]?.[item.id]?.criteriaAnswers?.[matchedCriteria.id] || 'Yes')
-                              : 'Yes';
-                            const userAnswerYes = userAnswer === 'Yes';
+                          const userAnswer = matchedCriteria
+                            ? (sectionStates[sectionKey]?.[item.id]?.criteriaAnswers?.[matchedCriteria.id] || 'Yes')
+                            : 'Yes';
 
-                            const scoreColor = scoreNum >= 75 ? '#16a34a' : scoreNum >= 50 ? '#d97706' : '#dc2626';
-                            const scoreGradient = scoreNum >= 75
-                              ? 'linear-gradient(90deg, #4ade80, #22c55e)'
-                              : scoreNum >= 50
-                              ? 'linear-gradient(90deg, #fbbf24, #f59e0b)'
-                              : 'linear-gradient(90deg, #f87171, #ef4444)';
+                          // Card accent class
+                          const cardAccentClass = (() => {
+                            const cls = getAiBadgeClass(entry.aiFinding);
+                            if (cls === 'obs-pill-agree') return 'card-agree';
+                            if (cls === 'obs-pill-partial') return 'card-partial';
+                            if (cls === 'obs-pill-missing') return 'card-missing';
+                            return 'card-gray';
+                          })();
 
-                            return (
-                              <div key={entry.key} className="obs-question-card">
+                          // Status icon for AI badge
+                          const aiStatusIcon = (() => {
+                            const cls = getAiBadgeClass(entry.aiFinding);
+                            if (cls === 'obs-pill-agree') return '✓';
+                            if (cls === 'obs-pill-partial') return '◐';
+                            if (cls === 'obs-pill-missing') return '✗';
+                            return '—';
+                          })();
 
-                                {/* Row 1: Number + Title + Badges */}
-                                <div style={{ display: 'flex', gap: '12px', alignItems: 'flex-start' }}>
-                                  <div className="obs-q-num">{displayNum}</div>
-                                  <div style={{ flex: 1 }}>
-                                    <div style={{ fontSize: '13.5px', fontWeight: 700, color: '#0f172a', lineHeight: '1.45' }}>
-                                      {entry.question ? renderFormattedText(entry.question) : matchedCriteria?.label ? renderFormattedText(matchedCriteria.label) : `Criteria ${entry.key.toUpperCase()}`}
-                                    </div>
-                                    {entry.summary && (
-                                      <div style={{ fontSize: '12px', color: '#64748b', marginTop: '4px', fontWeight: 500 }}>
-                                        {renderFormattedText(entry.summary)}
+                          // Gauge colors
+                          const gaugeStroke = scoreNum >= 75 ? '#22c55e' : scoreNum >= 50 ? '#f59e0b' : '#ef4444';
+                          const gaugeGlow = scoreNum >= 75
+                            ? 'rgba(34,197,94,0.4)'
+                            : scoreNum >= 50
+                            ? 'rgba(245,158,11,0.4)'
+                            : 'rgba(239,68,68,0.4)';
+                          const gaugeLevel = scoreNum >= 75 ? 'High' : scoreNum >= 50 ? 'Medium' : 'Low';
+                          const gaugeLevelClass = scoreNum >= 75 ? 'high' : scoreNum >= 50 ? 'medium' : 'low';
+                          const gaugeDesc = scoreNum >= 75
+                            ? 'Strong alignment with the policy requirement'
+                            : scoreNum >= 50
+                            ? 'Partial coverage detected — review recommended'
+                            : 'Significant gaps identified — action required';
+
+                          // SVG ring math
+                          const radius = 30;
+                          const circumference = 2 * Math.PI * radius;
+                          const dashOffset = circumference - (scoreNum / 100) * circumference;
+
+                          return (
+                            <div key={entry.key} className={`obs-question-card ${cardAccentClass}`}>
+
+                              {/* ── Two-zone layout: Content Left + Gauge Right ── */}
+                              <div className="obs-card-layout">
+                                {/* LEFT: Main content */}
+                                <div className="obs-card-content">
+                                  {/* Row 1: Number + Title + Badges */}
+                                  <div style={{ display: 'flex', gap: '14px', alignItems: 'flex-start' }}>
+                                    <div className="obs-q-num">{displayNum}</div>
+                                    <div style={{ flex: 1 }}>
+                                      <div style={{ fontSize: '14px', fontWeight: 700, color: '#0f172a', lineHeight: '1.5' }}>
+                                        {entry.question ? renderFormattedText(entry.question) : matchedCriteria?.label ? renderFormattedText(matchedCriteria.label) : `Criteria ${entry.key.toUpperCase()}`}
                                       </div>
-                                    )}
-                                  </div>
-                                  {/* Top-right badges */}
-                                  <div style={{ display: 'flex', alignItems: 'center', gap: '6px', flexShrink: 0 }}>
-                                    <span className={`obs-pill obs-pill-user`}>
-                                      User: <strong>{userAnswer}</strong>
-                                    </span>
-                                    {hasFinding && (
-                                      <span className={`obs-pill ${agree ? 'obs-pill-agree' : 'obs-pill-missing'}`}>
-                                        AI: <strong>{entry.aiFinding}</strong>
-                                      </span>
-                                    )}
-                                  </div>
-                                </div>
-
-                                {/* Row 2: Action buttons */}
-                                <div style={{ display: 'flex', gap: '8px', marginTop: '12px', flexWrap: 'wrap' }}>
-                                  {entry.observation && (
-                                    <button
-                                      className={`obs-toggle-btn${isExpanded ? ' active' : ''}`}
-                                      onClick={() => toggleObsExpand(item.id, entry.key)}
-                                    >
-                                      {isExpanded ? <ChevronUp size={13} /> : <ChevronDown size={13} />}
-                                      {isExpanded ? 'Hide Details' : 'View Details'}
-                                    </button>
-                                  )}
-                                  {hasRef && (
-                                    <button
-                                      className={`obs-toggle-btn ref${isRefExpanded ? ' active' : ''}`}
-                                      onClick={() => toggleRefExpand(item.id, entry.key)}
-                                    >
-                                      <BookOpen size={13} />
-                                      {isRefExpanded ? 'Hide Reference' : 'View Reference'}
-                                    </button>
-                                  )}
-                                </div>
-
-                                {/* Expandable Observation panel */}
-                                {isExpanded && entry.observation && (
-                                  <div className="obs-detail-panel">
-                                    <div className="obs-detail-panel-heading">
-                                      <FileText size={14} />
-                                      Observation
-                                    </div>
-                                    <div className="obs-detail-panel-body">{renderFormattedText(entry.observation)}</div>
-                                  </div>
-                                )}
-
-                                {/* Expandable Reference panel */}
-                                {isRefExpanded && hasRef && (
-                                  isAiAnswerMissing(entry.aiFinding, entry.reference) ? (
-                                    <div className="obs-ref-no-match">
-                                      <AlertTriangle size={14} style={{ color: '#f59e0b', flexShrink: 0 }} />
-                                      <span>No reference citation available — requirement was not found in the uploaded document.</span>
-                                    </div>
-                                  ) : (
-                                    <div className="obs-ref-panel">
-                                      <div className="obs-ref-panel-heading">
-                                        <Quote size={14} />
-                                        Document Reference &amp; Citation
-                                      </div>
-                                      {renderReferenceContent(entry.reference)}
-                                      {/* View in File button — opens PDF with highlight */}
-                                      {uploaded?.fileBase64 && (
-                                        <div style={{ marginTop: '10px', display: 'flex', justifyContent: 'flex-end' }}>
-                                          <button
-                                            onClick={() => setPdfViewer({
-                                              fileBase64: uploaded.fileBase64,
-                                              fileName: uploaded.fileName,
-                                              reference: entry.reference,
-                                            })}
-                                            style={{
-                                              display: 'inline-flex',
-                                              alignItems: 'center',
-                                              gap: '6px',
-                                              padding: '6px 14px',
-                                              borderRadius: '20px',
-                                              background: 'linear-gradient(135deg, #1e3a5f, #0b3b60)',
-                                              border: '1px solid rgba(37,99,235,0.3)',
-                                              color: '#ffffff',
-                                              fontSize: '12px',
-                                              fontWeight: 700,
-                                              cursor: 'pointer',
-                                              boxShadow: '0 2px 8px rgba(11,59,96,0.25)',
-                                              transition: 'all 0.15s ease',
-                                            }}
-                                          >
-                                            <ExternalLink size={12} />
-                                            View in File
-                                          </button>
+                                      {entry.summary && (
+                                        <div className="obs-summary-inline">
+                                          <span className="obs-summary-label">Observation:</span>
+                                          <span className="obs-summary-body">{renderFormattedText(entry.summary)}</span>
                                         </div>
                                       )}
-                                    </div>
-                                  )
-                                )}
+                                      {/* ── Animated Verdict Strip ── */}
+                                      <div className="obs-verdict-strip">
 
-                                {/* AI Confidence score */}
+                                        {/* User Answer pill */}
+                                        <div className={`obs-verdict-pill obs-verdict-pill-user ${userAnswer === 'Yes' ? 'yes' : 'no'}`}>
+                                          <span className="obs-verdict-pill-dot" />
+                                          <span className="obs-verdict-pill-label">Your Answer</span>
+                                          <span className="obs-verdict-pill-val">{userAnswer}</span>
+                                        </div>
+
+                                        {/* Animated flowing arrow */}
+                                        <div className="obs-verdict-flow">
+                                          <span className="obs-flow-dot obs-flow-dot-1" />
+                                          <span className="obs-flow-dot obs-flow-dot-2" />
+                                          <span className="obs-flow-dot obs-flow-dot-3" />
+                                          <span className="obs-flow-arrow">›</span>
+                                        </div>
+
+                                        {/* AI Finding pill */}
+                                        {hasFinding ? (
+                                          <div className={`obs-verdict-pill obs-verdict-pill-ai ${getAiBadgeClass(entry.aiFinding)}`}>
+                                            <span className="obs-verdict-pill-dot" />
+                                            <span className="obs-verdict-pill-label">AI Finding</span>
+                                            <span className="obs-verdict-pill-val">{entry.aiFinding}</span>
+                                          </div>
+                                        ) : (
+                                          <div className="obs-verdict-pill obs-verdict-pill-pending">
+                                            <span className="obs-verdict-pill-dot" />
+                                            <span className="obs-verdict-pill-label">AI Finding</span>
+                                            <span className="obs-verdict-pill-val">Pending…</span>
+                                          </div>
+                                        )}
+
+                                        {/* Aligned / Differs badge */}
+                                        {hasFinding && (() => {
+                                          const isAligned =
+                                            (userAnswer === 'Yes' && getAiBadgeClass(entry.aiFinding) === 'obs-pill-agree') ||
+                                            (userAnswer === 'No'  && getAiBadgeClass(entry.aiFinding) === 'obs-pill-missing');
+                                          return (
+                                            <div className={`obs-verdict-result ${isAligned ? 'aligned' : 'differs'}`}>
+                                              <span className="obs-verdict-result-icon">{isAligned ? '✓' : '⚠'}</span>
+                                              {isAligned ? 'Aligned' : 'Differs'}
+                                            </div>
+                                          );
+                                        })()}
+
+                                      </div>
+                                    </div>
+                                  </div>
+
+                                  {/* Row 2: Action buttons */}
+                                  <div style={{ display: 'flex', gap: '8px', marginTop: '14px', flexWrap: 'wrap' }}>
+                                    {/* View Details — only if there are bullet points OR a fallback observation text */}
+                                    {(entry.observationPoints.length > 0 || entry.observation) && (
+                                      <button
+                                        className={`obs-toggle-btn${isExpanded ? ' active' : ''}`}
+                                        onClick={() => toggleObsExpand(item.id, entry.key)}
+                                      >
+                                        {isExpanded ? <ChevronUp size={13} /> : <ChevronDown size={13} />}
+                                        {isExpanded ? 'Hide Details' : 'View Details'}
+                                      </button>
+                                    )}
+                                    {hasRef && (
+                                      <button
+                                        className={`obs-toggle-btn ref${isRefExpanded ? ' active' : ''}`}
+                                        onClick={() => toggleRefExpand(item.id, entry.key)}
+                                      >
+                                        <BookOpen size={13} />
+                                        {isRefExpanded ? 'Hide Reference' : 'View Reference'}
+                                      </button>
+                                    )}
+                                  </div>
+
+                                  {/* Expandable Observation panel — bullet points preferred, fallback to paragraph */}
+                                  {isExpanded && (entry.observationPoints.length > 0 || entry.observation) && (
+                                    <div className="obs-detail-panel">
+                                      <div className="obs-detail-panel-heading">
+                                        <FileText size={14} />
+                                        Detailed Observation
+                                      </div>
+                                      {entry.observationPoints.length > 0 ? (
+                                        <ul className="obs-point-list">
+                                          {entry.observationPoints.map((point, pIdx) => (
+                                            <li key={pIdx} className="obs-point-item">
+                                              <span className="obs-point-marker" />
+                                              <span>{renderFormattedText(point)}</span>
+                                            </li>
+                                          ))}
+                                        </ul>
+                                      ) : (
+                                        // Fallback: old dense paragraph if no bullet points
+                                        <div className="obs-detail-panel-body">{renderFormattedText(entry.observation)}</div>
+                                      )}
+                                    </div>
+                                  )}
+
+                                  {/* Expandable Reference panel */}
+                                  {isRefExpanded && hasRef && (
+                                    isAiAnswerMissing(entry.aiFinding, entry.reference) ? (
+                                      <div className="obs-ref-no-match">
+                                        <AlertTriangle size={14} style={{ color: '#f59e0b', flexShrink: 0 }} />
+                                        <span>No reference citation available — requirement was not found in the uploaded document.</span>
+                                      </div>
+                                    ) : (
+                                      <div className="obs-ref-panel">
+                                        <div className="obs-ref-panel-heading">
+                                          <Quote size={14} />
+                                          Document Reference &amp; Citation
+                                        </div>
+                                        {renderReferenceContent(entry.reference)}
+                                        {/* View in File button — opens PDF with highlight */}
+                                        {uploaded?.fileBase64 && (
+                                          <div style={{ marginTop: '10px', display: 'flex', justifyContent: 'flex-end' }}>
+                                            <button
+                                              onClick={() => setPdfViewer({
+                                                fileBase64: uploaded.fileBase64,
+                                                fileName: uploaded.fileName,
+                                                reference: entry.reference,
+                                              })}
+                                              style={{
+                                                display: 'inline-flex',
+                                                alignItems: 'center',
+                                                gap: '6px',
+                                                padding: '6px 14px',
+                                                borderRadius: '20px',
+                                                background: 'linear-gradient(135deg, #1e3a5f, #0b3b60)',
+                                                border: '1px solid rgba(37,99,235,0.3)',
+                                                color: '#ffffff',
+                                                fontSize: '12px',
+                                                fontWeight: 700,
+                                                cursor: 'pointer',
+                                                boxShadow: '0 2px 8px rgba(11,59,96,0.25)',
+                                                transition: 'all 0.15s ease',
+                                              }}
+                                            >
+                                              <ExternalLink size={12} />
+                                              View in File
+                                            </button>
+                                          </div>
+                                        )}
+                                      </div>
+                                    )
+                                  )}
+                                </div>
+
+                                {/* RIGHT: Compact Confidence Gauge */}
                                 {hasScore && (
-                                  <div className="obs-confidence-row">
-                                    <span className="obs-confidence-label">AI Confidence</span>
-                                    <div className="obs-confidence-track">
+                                  <div className="obs-card-gauge">
+                                    <div className="gauge-mini-label">AI CONFIDENCE</div>
+                                    <div className="gauge-mini-ring-wrap">
+                                      <svg className="gauge-mini-svg" viewBox="0 0 64 64">
+                                        <circle className="gauge-ring-bg" cx="32" cy="32" r="26" />
+                                        <circle
+                                          className="gauge-ring-fill animated"
+                                          cx="32" cy="32" r="26"
+                                          stroke={gaugeStroke}
+                                          strokeDasharray={2 * Math.PI * 26}
+                                          strokeDashoffset={(2 * Math.PI * 26) - (scoreNum / 100) * (2 * Math.PI * 26)}
+                                          style={{ '--gauge-glow': gaugeGlow }}
+                                        />
+                                      </svg>
+                                      <div className="gauge-mini-center">
+                                        <span className="gauge-mini-number" style={{ color: gaugeStroke }}>{scoreNum}</span>
+                                        <span className="gauge-mini-pct" style={{ color: gaugeStroke }}>%</span>
+                                      </div>
+                                    </div>
+                                    {/* Animated shimmer bar */}
+                                    <div className="gauge-shimmer-track">
                                       <div
-                                        className="obs-confidence-fill"
-                                        style={{ width: `${scoreNum}%`, background: scoreGradient }}
+                                        className="gauge-shimmer-fill"
+                                        style={{
+                                          width: `${scoreNum}%`,
+                                          background: `linear-gradient(90deg, ${gaugeStroke}, ${gaugeStroke}dd)`,
+                                          '--shimmer-color': gaugeStroke,
+                                        }}
                                       />
                                     </div>
-                                    <span className="obs-confidence-pct" style={{ color: scoreColor }}>
-                                      {fmtScore(entry.score)}
-                                    </span>
+                                    <div className={`gauge-mini-badge ${gaugeLevelClass}`}>
+                                      {gaugeLevel}
+                                    </div>
                                   </div>
                                 )}
-
                               </div>
-                            );
-                          })
-                        )}
-                      </div>
 
-                      {/* RIGHT: Sidebar */}
-                      <div className="obs-sidebar-col">
-
-                        {/* Review Comments card */}
-                        <div className="obs-sidebar-card">
-                          <div className="obs-sidebar-card-heading">
-                            <MessageSquare size={15} style={{ color: '#2563eb' }} />
-                            Review Comments
-                          </div>
-                          <textarea
-                            className="review-comments-input"
-                            value={commentText}
-                            placeholder="Add your review observations or notes here..."
-                            onChange={(e) => {
-                              const val = e.target.value;
-                              setReviewComments(prev => ({ ...prev, [item.id]: val }));
-                            }}
-                          />
-                          {commentText && (
-                            <div style={{ marginTop: '8px', textAlign: 'right' }}>
-                              <span style={{ fontSize: '11px', color: '#64748b' }}>{commentText.length} chars</span>
                             </div>
-                          )}
-                        </div>
-
-
-                      </div>
+                          );
+                        })
+                      )}
                     </div>
 
                   </div>
                 );
-              });
+                }) // end section.items.map
+              ]; // end section array
             })}
-
-
           </div>
 
-          {/* FOOTER BAR WITH GENERATE ACTION PLAN BUTTON */}
-          <footer className="footer-bar" style={{ borderRadius: '8px', marginTop: '16px' }}>
+          {/* ── FOOTER BAR ── */}
+          <footer className="obs-footer-bar">
             <button className="secondary-btn" onClick={() => setCurrentStep('UPLOAD_DOCUMENTS')}>
               <ArrowLeft size={15} />
-              Back to Upload Documents
+              Back to Upload
             </button>
-            <button className="primary-btn" onClick={handleSave}>
-              <Save size={15} />
-              Save Review Observations
-            </button>
-            <button className="submit-btn" onClick={() => setCurrentStep('ACTION_PLAN')}>
-              Generate Action Plan
-              <ChevronRight size={15} />
-            </button>
+            <div style={{ display: 'flex', gap: '10px' }}>
+              <button className="primary-btn" onClick={handleSave}>
+                <Save size={15} />
+                Save
+              </button>
+              <button className="submit-btn obs-footer-cta" onClick={() => setCurrentStep('ACTION_PLAN')}>
+                Generate Action Plan
+                <ChevronRight size={15} />
+              </button>
+            </div>
           </footer>
         </main>
-      )}
+        );
+      })()}
 
       {/* STEP 4: ACTION PLAN PAGE (EXACT MATCHING UPLOADED PHOTO) */}
       {currentStep === 'ACTION_PLAN' && (
