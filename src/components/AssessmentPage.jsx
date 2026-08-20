@@ -25,7 +25,17 @@ import {
   Quote,
   ChevronUp,
   ChevronDown,
-  ExternalLink
+  ExternalLink,
+  UserPlus,
+  Users,
+  Info,
+  Sparkles,
+  FileUp,
+  Clock,
+  Filter,
+  FolderCheck,
+  MapPin,
+  Ban
 } from 'lucide-react';
 
 import { QUESTIONS_BY_SECTION } from '../data/questionsData';
@@ -52,11 +62,13 @@ const TABS = [
 
 /**
  * Parses markdown-style bold text (**text**) and renders it with <strong> tags in React.
+ * Also unescapes literal \n into real newlines.
  */
 const renderFormattedText = (text) => {
   if (!text || typeof text !== 'string') return text;
-  const parts = text.split(/\*\*(.*?)\*\*/g);
-  if (parts.length <= 1) return text;
+  const cleanText = text.replace(/\\n/g, '\n');
+  const parts = cleanText.split(/\*\*(.*?)\*\*/g);
+  if (parts.length <= 1) return cleanText;
 
   return parts.map((part, index) =>
     index % 2 === 1 ? <strong key={index}>{part}</strong> : part
@@ -64,16 +76,100 @@ const renderFormattedText = (text) => {
 };
 
 /**
- * Parses a reference string into an array of individual citation points.
- * Automatically splits multiple quoted excerpts ("...") or line breaks into clean point-by-point items.
+ * Structurally parses observation text or arrays into clean, scannable bullet point items.
+ * If input is an array (observation_points), returns clean array elements.
+ * If input is a string, splits on double newlines (\n\n) or section headers if present.
+ */
+const parseStructuredObservation = (obsInput) => {
+  if (!obsInput) return [];
+
+  // If already an array (e.g. observation_points from backend)
+  if (Array.isArray(obsInput)) {
+    return obsInput
+      .map(item => (typeof item === 'string' ? item.trim() : String(item || '').trim()))
+      .filter(Boolean);
+  }
+
+  if (typeof obsInput !== 'string') return [];
+
+  // 1. Unescape literal \n strings if present
+  let text = obsInput.replace(/\\n/g, '\n').trim();
+  if (!text) return [];
+
+  // 2. Check for double newlines or line splits
+  const lineSplits = text.split(/\n+/).map(s => s.trim()).filter(Boolean);
+  if (lineSplits.length >= 2) {
+    return lineSplits;
+  }
+
+  // 3. Check for known section headers like "Compliance Determination:", "Supporting Evidence:", "Final Assessment:", etc.
+  const headerRegex = /(?=\b(?:Compliance Determination|Supporting Evidence|Final Assessment|Policy Statement|Prevention Measures|Staff Responsibilities|Reporting and Response|Investigation|Coverage|Verdict|Evidence|Gap|Conclusion)\s*:)/gi;
+
+  const headerMatches = text.split(headerRegex).map(s => s.trim()).filter(Boolean);
+  if (headerMatches.length >= 2) {
+    return headerMatches;
+  }
+
+  return [text];
+};
+
+/**
+ * Ensures header labels like "Document content:", "Evidence:", "Gap:", "Conclusion:" at the start of a point are bolded.
+ */
+const formatPointHeader = (point) => {
+  if (!point || typeof point !== 'string') return point;
+  const clean = point.trim();
+
+  // If point already starts with markdown bold **, return as is
+  if (clean.startsWith('**')) return clean;
+
+  // Match "Header Name:" at start of line (e.g. "Document content:", "Evidence:", "Gap:", "Conclusion:")
+  const headerMatch = clean.match(/^([A-Za-z0-9\s_\-]{2,35}:)\s*(.*)/s);
+  if (headerMatch) {
+    return `**${headerMatch[1]}** ${headerMatch[2]}`;
+  }
+  return clean;
+};
+
+/**
+ * Helper to normalize reference whether passed as string or object { quote, location }.
+ */
+const normalizeReferenceObj = (reference) => {
+  if (!reference) return { quote: '', location: '' };
+
+  if (typeof reference === 'string') {
+    return { quote: reference.replace(/\\n/g, '\n').trim(), location: '' };
+  }
+
+  if (typeof reference === 'object' && reference !== null) {
+    const rawQuote = reference.quote || reference.text || reference.citation || '';
+    const quote = String(rawQuote).replace(/\\n/g, '\n').trim();
+    const location = (reference.location || reference.page || reference.lines || reference.section || '').trim();
+    return { quote, location };
+  }
+
+  return { quote: String(reference).replace(/\\n/g, '\n').trim(), location: '' };
+};
+
+/**
+ * Parses reference quote text into clean, structured citation points.
+ * Unescapes literal \n, splits on double newlines (\n\n), section numbers (1. Purpose), or quotes ("...").
  */
 const parseReferencePoints = (reference) => {
-  if (!reference || typeof reference !== 'string') return [];
+  const { quote } = normalizeReferenceObj(reference);
+  if (!quote) return [];
 
+  // Strip wrapping outer quotes if quote starts and ends with "
+  let cleanQuote = quote.trim();
+  if (cleanQuote.startsWith('"') && cleanQuote.endsWith('"') && cleanQuote.length > 2) {
+    cleanQuote = cleanQuote.slice(1, -1).trim();
+  }
+
+  // 1. Check for quoted excerpts inside: "..." or “...”
   const quoteRegex = /["“]([^"”]{5,})["”]/g;
   const quotes = [];
   let match;
-  while ((match = quoteRegex.exec(reference)) !== null) {
+  while ((match = quoteRegex.exec(cleanQuote)) !== null) {
     const q = match[1].trim();
     if (q) quotes.push(`"${q}"`);
   }
@@ -82,7 +178,18 @@ const parseReferencePoints = (reference) => {
     return quotes;
   }
 
-  const lines = reference
+  // 2. Check for double newlines or section breaks (e.g. "\n\n1. Purpose" or "\n5. Staff Responsibilities")
+  const sectionSplits = cleanQuote
+    .split(/(?:\n\s*)+(?=\d+\.|\b[A-Z][a-zA-Z\s]+:|\n)/)
+    .map(s => s.trim())
+    .filter(Boolean);
+
+  if (sectionSplits.length >= 2) {
+    return sectionSplits;
+  }
+
+  // 3. Standard line splits
+  const lines = cleanQuote
     .split(/\n+/)
     .map(l => l.trim())
     .filter(l => l.length > 0);
@@ -91,39 +198,62 @@ const parseReferencePoints = (reference) => {
     return lines;
   }
 
-  return [reference.trim()];
+  return [cleanQuote];
 };
 
 /**
- * Renders reference text. If multiple quotes/sentences are present, renders them point-by-point (①, ②).
+ * Renders reference citation text & location badge.
+ * Displays reference.quote point-by-point, plus reference.location as a small subtitle caption badge.
  */
 const renderReferenceContent = (reference) => {
-  const points = parseReferencePoints(reference);
-  if (points.length >= 2) {
-    return (
-      <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', marginTop: '6px' }}>
-        {points.map((pt, idx) => (
-          <div key={idx} style={{ display: 'flex', gap: '8px', alignItems: 'flex-start', fontSize: '12.5px', lineHeight: '1.65', color: '#1e293b' }}>
-            <span style={{
-              display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
-              minWidth: '20px', height: '20px', borderRadius: '50%',
-              background: '#dcfce7', border: '1px solid #86efac',
-              color: '#15803d', fontSize: '11px', fontWeight: 800,
-              flexShrink: 0, marginTop: '2px'
-            }}>
-              {idx + 1}
-            </span>
-            <div style={{ flex: 1, background: '#ffffff', borderRadius: '6px', padding: '6px 10px', border: '1px solid #dcfce7' }}>
-              {renderFormattedText(pt)}
-            </div>
-          </div>
-        ))}
-      </div>
-    );
-  }
+  const { quote, location } = normalizeReferenceObj(reference);
+  const points = parseReferencePoints(quote);
+
   return (
-    <div style={{ fontSize: '12.5px', lineHeight: '1.65', color: '#1e293b', whiteSpace: 'pre-line' }}>
-      {renderFormattedText(reference)}
+    <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', marginTop: '6px' }}>
+      {location && (
+        <div style={{
+          display: 'inline-flex',
+          alignItems: 'center',
+          gap: '5px',
+          fontSize: '11px',
+          fontWeight: 700,
+          color: '#1d4ed8',
+          background: '#eff6ff',
+          border: '1px solid #bfdbfe',
+          padding: '2px 10px',
+          borderRadius: '12px',
+          alignSelf: 'flex-start'
+        }}>
+          <MapPin size={12} color="#2563eb" />
+          <span>Location: {location}</span>
+        </div>
+      )}
+
+      {points.length >= 2 ? (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+          {points.map((pt, idx) => (
+            <div key={idx} style={{ display: 'flex', gap: '8px', alignItems: 'flex-start', fontSize: '12.5px', lineHeight: '1.65', color: '#1e293b' }}>
+              <span style={{
+                display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
+                minWidth: '20px', height: '20px', borderRadius: '50%',
+                background: '#dcfce7', border: '1px solid #86efac',
+                color: '#15803d', fontSize: '11px', fontWeight: 800,
+                flexShrink: 0, marginTop: '2px'
+              }}>
+                {idx + 1}
+              </span>
+              <div style={{ flex: 1, background: '#ffffff', borderRadius: '6px', padding: '8px 12px', border: '1px solid #dcfce7', whiteSpace: 'pre-line' }}>
+                {renderFormattedText(formatPointHeader(pt))}
+              </div>
+            </div>
+          ))}
+        </div>
+      ) : (
+        <div style={{ fontSize: '12.5px', lineHeight: '1.65', color: '#1e293b', whiteSpace: 'pre-line', background: '#ffffff', borderRadius: '6px', padding: '8px 12px', border: '1px solid #dcfce7' }}>
+          {renderFormattedText(formatPointHeader(points[0] || quote))}
+        </div>
+      )}
     </div>
   );
 };
@@ -648,46 +778,63 @@ export default function AssessmentPage({ user, onLogout }) {
       {/* STEP 1: ASSESSMENT QUESTIONNAIRE */}
       {currentStep === 'ASSESSMENT' && (
         <>
+          {/* SEGMENTED TAB BAR */}
           <div className="tabs-container">
             <div className="tabs-wrapper">
-              {TABS.map((tab) => (
-                <button
-                  key={tab}
-                  className={`tab-btn ${activeTab === tab ? 'active' : ''}`}
-                  onClick={() => setActiveTab(tab)}
-                >
-                  <CheckCircle2 className="tab-check-icon" />
-                  {tab}
-                </button>
-              ))}
+              {TABS.map((tab) => {
+                const sectionItems = QUESTIONS_BY_SECTION[tab]?.items || [];
+                const totalCount = sectionItems.length;
+
+                return (
+                  <button
+                    key={tab}
+                    className={`tab-btn ${activeTab === tab ? 'active' : ''}`}
+                    onClick={() => setActiveTab(tab)}
+                  >
+                    <CheckCircle2 className="tab-check-icon" />
+                    <span>{tab}</span>
+                    <span className="tab-count-badge">{totalCount}</span>
+                  </button>
+                );
+              })}
             </div>
           </div>
 
           <main className="main-layout-single">
+            {/* ELEGANT GLOBAL ASSIGN BANNER */}
             <div className="global-assign-banner">
               <div className="global-assign-info">
                 <div className="global-title-row">
+                  <div className="global-icon-badge">
+                    <ClipboardList size={18} color="#2563eb" />
+                  </div>
                   <span className="tab-title-text">{activeTab}</span>
+                  <span className="tab-section-count">
+                    {currentSectionData.items.length} Component{currentSectionData.items.length > 1 ? 's' : ''}
+                  </span>
                 </div>
                 <div className="global-label">Assign all {activeTab} questions to:</div>
                 <div className="mention-subtext">
-                  This will not be overridden by assigning individual components to additional individuals.
+                  Quickly set a default reviewer for all {currentSectionData.items.length} components in this section.
                 </div>
               </div>
 
               <div className="global-assign-input-box">
-                <input
-                  type="text"
-                  className="card-input"
-                  placeholder="Mention someone..."
-                  value={globalSearch}
-                  onFocus={() => setShowGlobalDropdown(true)}
-                  onChange={(e) => {
-                    setGlobalSearch(e.target.value);
-                    setGlobalAssignee(e.target.value);
-                  }}
-                  onBlur={() => setTimeout(() => setShowGlobalDropdown(false), 200)}
-                />
+                <div className="global-input-wrapper">
+                  <Users size={16} className="global-input-icon" />
+                  <input
+                    type="text"
+                    className="card-input global-mention-input"
+                    placeholder="Assign section to..."
+                    value={globalSearch}
+                    onFocus={() => setShowGlobalDropdown(true)}
+                    onChange={(e) => {
+                      setGlobalSearch(e.target.value);
+                      setGlobalAssignee(e.target.value);
+                    }}
+                    onBlur={() => setTimeout(() => setShowGlobalDropdown(false), 200)}
+                  />
+                </div>
 
                 {showGlobalDropdown && (
                   <div className="mention-dropdown">
@@ -711,12 +858,15 @@ export default function AssessmentPage({ user, onLogout }) {
               </div>
             </div>
 
+            {/* ELEGANT STANDARD BANNER */}
             <div className="standard-banner">
+              <div className="standard-banner-badge">STANDARD 1</div>
               <div className="standard-banner-title">
                 {currentSectionData.standardTitle}
               </div>
             </div>
 
+            {/* POLICY COMPONENT CARDS */}
             {currentSectionData.items.map((item) => {
               const itemState = sectionStates[activeTab]?.[item.id] || {
                 assignee: '',
@@ -728,49 +878,65 @@ export default function AssessmentPage({ user, onLogout }) {
               const currentSearch = searchStates[item.id]?.search ?? itemState.assignee;
               const showItemDropdown = searchStates[item.id]?.showDropdown ?? false;
 
+              // Check completion status
+              const totalCriteria = item.criteria.length;
+              const answeredCount = Object.keys(itemState.criteriaAnswers || {}).length;
+              const isFullyAnswered = answeredCount >= totalCriteria;
+
               return (
-                <div key={item.id} className="policy-card">
+                <div key={item.id} className={`policy-card ${isFullyAnswered ? 'card-completed' : ''}`}>
                   <div className="policy-header">
                     <div className="policy-title-container">
                       <div className="policy-id">
-                        <span>{item.id}</span>
+                        <span className="policy-id-pill">{item.id}</span>
                         <span className={`policy-badge ${item.criticalLevel === 'Critical' ? 'critical' : 'non-critical'}`}>
+                          <span className="badge-dot"></span>
                           {item.criticalLevel}
                         </span>
                       </div>
-                      <p className="policy-description">Component: {item.component}</p>
+                      <p className="policy-description">{item.component}</p>
+                    </div>
+
+                    {/* Completion chip */}
+                    <div className={`policy-status-chip ${isFullyAnswered ? 'done' : 'pending'}`}>
+                      <CheckCircle2 size={13} />
+                      <span>{answeredCount}/{totalCriteria} Answered</span>
                     </div>
                   </div>
 
                   <div className="criteria-container">
-                    <div className="criteria-section-title">Criteria: The Organization:</div>
+                    <div className="criteria-section-title">
+                      <FileText size={12} style={{ color: '#2563eb' }} />
+                      <span>CRITERIA: THE ORGANIZATION:</span>
+                    </div>
 
-                    {item.criteria.map((c) => {
+                    {item.criteria.map((c, qIdx) => {
                       const selectedVal = itemState.criteriaAnswers[c.id] || 'Yes';
                       return (
                         <div key={c.id} className="criteria-row">
-                          <div className="criteria-text">{c.label}</div>
-                          <div className="radio-group">
-                            <label className={`radio-label ${selectedVal === 'Yes' ? 'selected' : ''}`}>
-                              <input
-                                type="radio"
-                                name={`radio_${item.id}_${c.id}`}
-                                className="radio-input"
-                                checked={selectedVal === 'Yes'}
-                                onChange={() => handleRadioChange(item.id, c.id, 'Yes')}
-                              />
-                              Yes
-                            </label>
-                            <label className={`radio-label ${selectedVal === 'No' ? 'selected' : ''}`}>
-                              <input
-                                type="radio"
-                                name={`radio_${item.id}_${c.id}`}
-                                className="radio-input"
-                                checked={selectedVal === 'No'}
-                                onChange={() => handleRadioChange(item.id, c.id, 'No')}
-                              />
-                              No
-                            </label>
+                          <div className="criteria-left-box">
+                            <span className="q-index-pill">Q{qIdx + 1}</span>
+                            <div className="criteria-text">{c.label}</div>
+                          </div>
+
+                          {/* SEGMENTED TOGGLE BUTTON CHIPS */}
+                          <div className="segmented-toggle-group">
+                            <button
+                              type="button"
+                              className={`toggle-chip chip-yes ${selectedVal === 'Yes' ? 'active' : ''}`}
+                              onClick={() => handleRadioChange(item.id, c.id, 'Yes')}
+                            >
+                              <Check size={13} />
+                              <span>Yes</span>
+                            </button>
+                            <button
+                              type="button"
+                              className={`toggle-chip chip-no ${selectedVal === 'No' ? 'active' : ''}`}
+                              onClick={() => handleRadioChange(item.id, c.id, 'No')}
+                            >
+                              <X size={13} />
+                              <span>No</span>
+                            </button>
                           </div>
                         </div>
                       );
@@ -779,12 +945,15 @@ export default function AssessmentPage({ user, onLogout }) {
 
                   <div className="card-details-grid">
                     <div className="detail-column">
-                      <div className="detail-label">Assign to</div>
+                      <div className="detail-label">
+                        <UserPlus size={13} style={{ color: '#2563eb' }} />
+                        <span>Assign Component To</span>
+                      </div>
                       <div className="mention-input-container">
                         <input
                           type="text"
                           className="card-input"
-                          placeholder={globalAssignee ? `Mention someone (Global: ${globalAssignee})` : 'Mention someone'}
+                          placeholder={globalAssignee ? `Assigned (Global: ${globalAssignee})` : 'Select reviewer...'}
                           value={currentSearch}
                           onFocus={() => setSearchStates(prev => ({
                             ...prev,
@@ -831,18 +1000,23 @@ export default function AssessmentPage({ user, onLogout }) {
                       </div>
 
                       <button
-                        className="rationale-toggle-btn"
+                        type="button"
+                        className={`rationale-toggle-btn ${itemState.showRationale ? 'active' : ''}`}
                         onClick={() => toggleRationale(item.id)}
                       >
-                        Rationale
+                        <Info size={13} />
+                        <span>{itemState.showRationale ? 'Hide Compliance Rationale' : 'View Compliance Rationale'}</span>
                       </button>
                     </div>
 
                     <div className="detail-column">
-                      <div className="detail-label">Comments</div>
+                      <div className="detail-label">
+                        <MessageSquare size={13} style={{ color: '#2563eb' }} />
+                        <span>Review Notes / Comments</span>
+                      </div>
                       <textarea
                         className="card-input"
-                        placeholder="Provide any details (optional)"
+                        placeholder="Add optional notes or compliance rationale..."
                         value={itemState.comments}
                         onChange={(e) => handleCommentChange(item.id, e.target.value)}
                       />
@@ -851,7 +1025,10 @@ export default function AssessmentPage({ user, onLogout }) {
 
                   {itemState.showRationale && (
                     <div className="rationale-drawer">
-                      <div className="rationale-drawer-title">Rationale Details</div>
+                      <div className="rationale-drawer-title">
+                        <Info size={14} />
+                        <span>Compliance Rationale Details</span>
+                      </div>
                       <p>{renderFormattedText(item.rationaleText)}</p>
                     </div>
                   )}
@@ -874,144 +1051,230 @@ export default function AssessmentPage({ user, onLogout }) {
       )}
 
       {/* STEP 2: UPLOAD DOCUMENTS TABLE */}
-      {currentStep === 'UPLOAD_DOCUMENTS' && (
-        <main className="doc-review-container">
-          <div className="doc-controls-bar">
-            <div className="doc-filters-group">
-              <div className="search-box-input">
-                <Search size={16} className="search-icon" />
-                <input
-                  type="text"
-                  placeholder="Search documents"
-                  value={docSearchQuery}
-                  onChange={(e) => setDocSearchQuery(e.target.value)}
-                />
+      {currentStep === 'UPLOAD_DOCUMENTS' && (() => {
+        // Calculate document upload stats
+        let totalCompCount = 0;
+        let uploadedCount = 0;
+        let requiredCompCount = 0;
+
+        Object.keys(QUESTIONS_BY_SECTION).forEach(secKey => {
+          QUESTIONS_BY_SECTION[secKey].items.forEach(item => {
+            totalCompCount++;
+            if (uploadedDocs[item.id]) uploadedCount++;
+
+            const itemAnswers = sectionStates[secKey]?.[item.id]?.criteriaAnswers || {};
+            const requiresDoc = item.criteria.some(c => (itemAnswers[c.id] || 'No') === 'Yes');
+            if (requiresDoc) requiredCompCount++;
+          });
+        });
+
+        const uploadProgressPct = requiredCompCount > 0
+          ? Math.round((uploadedCount / requiredCompCount) * 100)
+          : 100;
+
+        return (
+          <main className="doc-review-container">
+            {/* TOP CONTROLS & REPOSITORY HEADER */}
+            <div className="doc-controls-bar">
+              <div className="doc-controls-info">
+                <div className="doc-controls-title-row">
+                  <div className="doc-title-icon-badge">
+                    <FileUp size={18} color="#2563eb" />
+                  </div>
+                  <h1 className="doc-page-title">Policy Document Repository</h1>
+                  <span className="doc-progress-chip">
+                    <FolderCheck size={13} />
+                    <span>
+                      {requiredCompCount > 0
+                        ? `${uploadedCount} / ${requiredCompCount} Required Documents Uploaded (${uploadProgressPct}%)`
+                        : `0 Documents Required (All Answered "No")`}
+                    </span>
+                  </span>
+                </div>
+                <p className="doc-page-subtitle">
+                  Attach compliance policy PDFs or text documents for standard components answered "Yes" to enable automated AI observation review.
+                </p>
               </div>
 
-              <select
-                className="filter-select"
-                value={selectedOperation}
-                onChange={(e) => setSelectedOperation(e.target.value)}
-              >
-                <option value="All">Operations: All Sections</option>
-                <option value="Policies">Policies</option>
-                <option value="Training">Training</option>
-                <option value="Internal Feedback Systems">Internal Feedback Systems</option>
-                <option value="Administrative Practices">Administrative Practices</option>
-              </select>
+              <div className="doc-filters-group">
+                <div className="search-box-input">
+                  <Search size={15} className="search-icon" />
+                  <input
+                    type="text"
+                    placeholder="Search documents or IDs..."
+                    value={docSearchQuery}
+                    onChange={(e) => setDocSearchQuery(e.target.value)}
+                  />
+                </div>
+
+                <div className="filter-select-wrapper">
+                  <Filter size={13} className="filter-icon" />
+                  <select
+                    className="filter-select"
+                    value={selectedOperation}
+                    onChange={(e) => setSelectedOperation(e.target.value)}
+                  >
+                    <option value="All">All Sections</option>
+                    <option value="Policies">Policies</option>
+                    <option value="Training">Training</option>
+                    <option value="Internal Feedback Systems">Internal Feedback Systems</option>
+                    <option value="Administrative Practices">Administrative Practices</option>
+                  </select>
+                </div>
+              </div>
             </div>
-          </div>
 
-          <div className="table-wrapper">
-            <table className="doc-table">
-              <thead>
-                <tr>
-                  <th style={{ width: '110px' }}>Designation</th>
-                  <th style={{ minWidth: '320px' }}>Standard / Component / Criteria</th>
-                  <th style={{ width: '80px' }}>Status</th>
-                  <th style={{ width: '220px' }}>Document</th>
-                  <th style={{ width: '180px' }}>Upload Status</th>
-                  <th style={{ width: '140px' }}>Uploaded By</th>
-                </tr>
-              </thead>
-              <tbody>
-                {Object.keys(QUESTIONS_BY_SECTION)
-                  .filter(sectionKey => selectedOperation === 'All' || selectedOperation === sectionKey)
-                  .map((sectionKey) => {
-                    const section = QUESTIONS_BY_SECTION[sectionKey];
+            {/* ELEVATED TABLE WRAPPER */}
+            <div className="table-wrapper">
+              <table className="doc-table">
+                <thead>
+                  <tr>
+                    <th style={{ width: '130px' }}>Designation</th>
+                    <th style={{ minWidth: '320px' }}>Standard / Component</th>
+                    <th style={{ width: '120px' }}>Status</th>
+                    <th style={{ width: '260px' }}>Attached Document</th>
+                    <th style={{ width: '180px' }}>Upload Status</th>
+                    <th style={{ width: '140px' }}>Uploaded By</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {Object.keys(QUESTIONS_BY_SECTION)
+                    .filter(sectionKey => selectedOperation === 'All' || selectedOperation === sectionKey)
+                    .map((sectionKey) => {
+                      const section = QUESTIONS_BY_SECTION[sectionKey];
+                      const sectionItems = section.items.filter(item =>
+                        item.component.toLowerCase().includes(docSearchQuery.toLowerCase()) ||
+                        item.id.toLowerCase().includes(docSearchQuery.toLowerCase())
+                      );
 
-                    return (
-                      <React.Fragment key={sectionKey}>
-                        <tr className="table-section-row">
-                          <td colSpan="6">{sectionKey}</td>
-                        </tr>
+                      if (sectionItems.length === 0) return null;
 
-                        {section.items
-                          .filter(item =>
-                            item.component.toLowerCase().includes(docSearchQuery.toLowerCase()) ||
-                            item.id.toLowerCase().includes(docSearchQuery.toLowerCase())
-                          )
-                          .map((item) => {
+                      // Section uploaded count
+                      const secUploadedCount = sectionItems.filter(it => uploadedDocs[it.id]).length;
+
+                      return (
+                        <React.Fragment key={sectionKey}>
+                          <tr className="table-section-row">
+                            <td colSpan="6">
+                              <div className="section-divider-content">
+                                <span className="section-divider-title">
+                                  <BookOpen size={14} style={{ color: '#2563eb', flexShrink: 0 }} />
+                                  <span>{sectionKey}</span>
+                                </span>
+                                <span className="section-divider-badge">
+                                  {secUploadedCount}/{sectionItems.length} Attached
+                                </span>
+                              </div>
+                            </td>
+                          </tr>
+
+                          {sectionItems.map((item) => {
                             const uploaded = uploadedDocs[item.id];
+                            const itemAnswers = sectionStates[sectionKey]?.[item.id]?.criteriaAnswers || {};
+                            // Document is required ONLY if at least one question is answered 'Yes'
+                            const hasYesAnswer = item.criteria.some(c => (itemAnswers[c.id] || 'No') === 'Yes');
 
                             return (
-                              <tr key={item.id}>
+                              <tr key={item.id} className={uploaded ? 'row-has-doc' : ''}>
                                 <td>
                                   <span className={`policy-badge ${item.criticalLevel === 'Critical' ? 'critical' : 'non-critical'}`}>
+                                    <span className="badge-dot"></span>
                                     {item.criticalLevel}
                                   </span>
                                 </td>
                                 <td>
-                                  <div style={{ fontWeight: 800, color: 'var(--navy-banner)', marginBottom: '4px' }}>
-                                    {item.id}
+                                  <div className="doc-table-comp-box">
+                                    <span className="policy-id-pill">{item.id}</span>
+                                    <span className="doc-table-comp-desc">{item.component}</span>
                                   </div>
-                                  <div style={{ fontSize: '12.5px', lineHeight: 1.4 }}>
-                                    {item.component}
-                                  </div>
-                                </td>
-                                <td style={{ color: '#64748b', fontSize: '12px', fontWeight: 600 }}>
-                                  {uploaded ? uploaded.status : 'N/A'}
                                 </td>
                                 <td>
                                   {uploaded ? (
-                                    <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                                    <span className="doc-status-badge uploaded">Uploaded</span>
+                                  ) : hasYesAnswer ? (
+                                    <span className="doc-status-badge pending">Not Attached</span>
+                                  ) : (
+                                    <span className="doc-status-badge not-required">Not Required</span>
+                                  )}
+                                </td>
+                                <td>
+                                  {uploaded ? (
+                                    <div className="doc-file-pill-group">
                                       <span
                                         className="doc-file-link"
                                         onClick={() => setPreviewDoc({ item, doc: uploaded })}
+                                        title="Click to preview document"
                                       >
-                                        <Paperclip size={13} />
-                                        {uploaded.fileName}
+                                        <Paperclip size={13} style={{ color: '#2563eb' }} />
+                                        <span className="doc-file-name-text">{uploaded.fileName}</span>
                                       </span>
                                       <button
-                                        title="Delete document"
+                                        type="button"
+                                        className="doc-delete-circle"
+                                        title="Remove document"
                                         onClick={() => setDeleteConfirmId(item.id)}
-                                        style={{ background: 'none', border: 'none', color: '#ef4444', cursor: 'pointer', display: 'inline-flex', padding: '2px' }}
                                       >
-                                        <Trash2 size={13} />
+                                        <Trash2 size={12} />
                                       </button>
                                     </div>
-                                  ) : (
+                                  ) : hasYesAnswer ? (
                                     <label className="upload-trigger-btn">
                                       <Upload size={13} />
-                                      Upload Document
+                                      <span>Upload Document</span>
                                       <input
                                         type="file"
                                         style={{ display: 'none' }}
                                         onChange={(e) => handleFileUpload(item.id, e)}
                                       />
                                     </label>
+                                  ) : (
+                                    <div className="doc-no-upload-box" title="Cannot upload document — all questions for this component are answered 'No'">
+                                      <Ban size={12} style={{ color: '#94a3b8' }} />
+                                      <span>Cannot Upload (Answered "No")</span>
+                                    </div>
                                   )}
                                 </td>
                                 <td>
-                                  <span className="upload-status-text">
-                                    {uploaded ? uploaded.uploadStatus : 'No document attached'}
-                                  </span>
+                                  <div className="upload-meta-time">
+                                    <Clock size={11} />
+                                    <span>{uploaded ? uploaded.uploadStatus : hasYesAnswer ? 'No document attached' : 'Cannot Upload (Answered "No")'}</span>
+                                  </div>
                                 </td>
-                                <td style={{ fontSize: '12px', color: '#334155' }}>
-                                  {uploaded ? (uploaded.uploadedBy || uploaded.reviewedBy || user.username) : '-'}
+                                <td>
+                                  {uploaded ? (
+                                    <div className="user-uploader-pill">
+                                      <div className="uploader-avatar">
+                                        {(uploaded.uploadedBy || uploaded.reviewedBy || user.username).charAt(0).toUpperCase()}
+                                      </div>
+                                      <span>{uploaded.uploadedBy || uploaded.reviewedBy || user.username}</span>
+                                    </div>
+                                  ) : (
+                                    <span style={{ color: '#94a3b8', fontSize: '12px' }}>-</span>
+                                  )}
                                 </td>
                               </tr>
                             );
                           })}
-                      </React.Fragment>
-                    );
-                  })}
-              </tbody>
-            </table>
-          </div>
+                        </React.Fragment>
+                      );
+                    })}
+                </tbody>
+              </table>
+            </div>
 
-          <footer className="footer-bar" style={{ borderRadius: '8px', marginTop: '16px' }}>
-            <button className="secondary-btn" onClick={() => setCurrentStep('ASSESSMENT')}>
-              <ArrowLeft size={15} />
-              Back to Assessment
-            </button>
-            <button className="submit-btn" onClick={handleProceedToReview}>
-              Proceed to Review Observations
-              <ChevronRight size={15} />
-            </button>
-          </footer>
-        </main>
-      )}
+            <footer className="footer-bar" style={{ borderRadius: '12px', marginTop: '16px' }}>
+              <button className="secondary-btn" onClick={() => setCurrentStep('ASSESSMENT')}>
+                <ArrowLeft size={15} />
+                Back to Assessment
+              </button>
+              <button className="submit-btn" onClick={handleProceedToReview}>
+                Proceed to Review Observations
+                <ChevronRight size={15} />
+              </button>
+            </footer>
+          </main>
+        );
+      })()}
 
       {/* STEP 3: REVIEW OBSERVATIONS VIEW */}
       {currentStep === 'REVIEW_OBSERVATIONS' && (() => {
@@ -1132,28 +1395,35 @@ export default function AssessmentPage({ user, onLogout }) {
                 const componentObs = getComponentObs(aiObservations, item.id);
 
                 // ── Build an array of per-question entries from componentObs ─
-                // Each entry: { key, question, summary, observation, aiFinding, score, reference }
+                // Each entry: { key, question, summary, observation, observationPoints, aiFinding, score, reference }
                 const buildQuestionEntries = (compObs) => {
                   if (!compObs || typeof compObs !== 'object') return [];
                   return Object.entries(compObs)
                     .filter(([, val]) => val && typeof val === 'object')
-                    .map(([key, val]) => ({
-                      key,
-                      question:           val.question            || '',
-                      summary:            val.summary             || '',
-                      observation:        val.observation         || val.text || '',
-                      // observation_points is the preferred bullet-point array from the AI
-                      observationPoints:  Array.isArray(val.observation_points)
-                                            ? val.observation_points.filter(Boolean)
-                                            : [],
-                      aiFinding:          val.AI_finding          || val.ai_finding || val.finding || '',
-                      aiConfidence:       val.ai_confidence       || val.score || '',
-                      score:              val.ai_confidence       || val.score || '',
-                      reference:          val.reference           || val.citation   || val.ref || '',
-                      // These are AI chain-of-thought fields — intentionally NOT shown to users
-                      // val.requirement_breakdown — hidden
-                      // val.evidence_analysis_and_justification — hidden
-                    }))
+                    .map(([key, val]) => {
+                      // Structurally parse observation into clean bullet points
+                      const rawObs = (Array.isArray(val.observation_points) && val.observation_points.length > 0)
+                        ? val.observation_points
+                        : (val.observation || val.text || '');
+
+                      const obsPoints = parseStructuredObservation(rawObs);
+                      const refVal = val.reference || val.citation || val.ref || null;
+
+                      return {
+                        key,
+                        question:           val.question            || '',
+                        summary:            val.summary             || '',
+                        observation:        val.observation         || val.text || '',
+                        observationPoints:  obsPoints,
+                        aiFinding:          val.AI_finding          || val.ai_finding || val.finding || '',
+                        aiConfidence:       val.ai_confidence       || val.score || '',
+                        score:              val.ai_confidence       || val.score || '',
+                        reference:          refVal,
+                        // These are AI chain-of-thought fields — intentionally NOT shown to users
+                        // val.requirement_breakdown — hidden
+                        // val.evidence_analysis_and_justification — hidden
+                      };
+                    })
                     .filter(e => e.question || e.observation || e.observationPoints.length || e.summary || e.reference || e.aiFinding);
                 };
 
@@ -1186,7 +1456,13 @@ export default function AssessmentPage({ user, onLogout }) {
                 };
                 const isNoMatchingRef = (ref) => {
                   if (!ref) return true;
-                  const r = String(ref).trim().toLowerCase();
+                  let r = '';
+                  if (typeof ref === 'string') {
+                    r = ref.trim().toLowerCase();
+                  } else if (typeof ref === 'object' && ref !== null) {
+                    r = (ref.quote || ref.text || ref.citation || ref.location || '').trim().toLowerCase();
+                  }
+                  if (!r) return true;
                   return r.includes('no matching') || r.includes('not found') || r.includes('no line') || r === 'none' || r === 'n/a';
                 };
                 const isAiAnswerMissing = (finding, ref) => {
@@ -1459,28 +1735,29 @@ export default function AssessmentPage({ user, onLogout }) {
                                     )}
                                   </div>
 
-                                  {/* Expandable Observation panel — bullet points preferred, fallback to paragraph */}
-                                  {isExpanded && (entry.observationPoints.length > 0 || entry.observation) && (
-                                    <div className="obs-detail-panel">
-                                      <div className="obs-detail-panel-heading">
-                                        <FileText size={14} />
-                                        Detailed Observation
-                                      </div>
-                                      {entry.observationPoints.length > 0 ? (
+                                  {/* Expandable Observation panel — structured bullet points */}
+                                  {isExpanded && (entry.observationPoints.length > 0 || entry.observation) && (() => {
+                                    const pointsToRender = entry.observationPoints.length > 0
+                                      ? entry.observationPoints
+                                      : parseStructuredObservation(entry.observation);
+
+                                    return (
+                                      <div className="obs-detail-panel">
+                                        <div className="obs-detail-panel-heading">
+                                          <FileText size={14} />
+                                          <span>Detailed Observation</span>
+                                        </div>
                                         <ul className="obs-point-list">
-                                          {entry.observationPoints.map((point, pIdx) => (
+                                          {pointsToRender.map((point, pIdx) => (
                                             <li key={pIdx} className="obs-point-item">
                                               <span className="obs-point-marker" />
-                                              <span>{renderFormattedText(point)}</span>
+                                              <span>{renderFormattedText(formatPointHeader(point))}</span>
                                             </li>
                                           ))}
                                         </ul>
-                                      ) : (
-                                        // Fallback: old dense paragraph if no bullet points
-                                        <div className="obs-detail-panel-body">{renderFormattedText(entry.observation)}</div>
-                                      )}
-                                    </div>
-                                  )}
+                                      </div>
+                                    );
+                                  })()}
 
                                   {/* Expandable Reference panel */}
                                   {isRefExpanded && hasRef && (
@@ -1617,7 +1894,30 @@ export default function AssessmentPage({ user, onLogout }) {
               {/* OVERALL SCORE BOX */}
               <div className="overall-score-subbox">
                 <div className="overall-score-subbox-title">Overall Score</div>
-                <div className="overall-score-value-big">{overallPercentage}%</div>
+                <svg className="overall-score-ring-svg" width="140" height="140" viewBox="0 0 140 140">
+                  <circle
+                    className="overall-score-ring-track"
+                    cx="70"
+                    cy="70"
+                    r="60"
+                  />
+                  <circle
+                    className="overall-score-ring-fill"
+                    cx="70"
+                    cy="70"
+                    r="60"
+                    stroke="#2563eb"
+                    strokeDasharray="377"
+                    strokeDashoffset={377 * (1 - Math.min(Math.max(overallPercentage, 0), 100) / 100)}
+                    transform="rotate(-90 70 70)"
+                  />
+                  <text className="overall-score-ring-text" x="70" y="65">
+                    {overallPercentage}%
+                  </text>
+                  <text className="overall-score-ring-label" x="70" y="88">
+                    Compliant
+                  </text>
+                </svg>
               </div>
 
               {/* SCORE BY OPERATION BAR CHART BOX (4 MAIN SECTIONS) */}
@@ -1912,8 +2212,27 @@ export default function AssessmentPage({ user, onLogout }) {
       {isProcessingAI && (
         <div className="ai-loading-overlay">
           <div className="ai-loading-card">
-            <div className="ai-spinner"></div>
-            <div className="ai-loading-title">AI is analyzing your documents</div>
+            <div className="ai-orbit-rig">
+              <div className="ai-orbit-core">
+                <Sparkles size={16} />
+              </div>
+              <div className="ai-orbit-dot ai-orbit-dot-1"></div>
+              <div className="ai-orbit-dot ai-orbit-dot-2"></div>
+              <div className="ai-orbit-dot ai-orbit-dot-3"></div>
+              <div className="ai-orbit-dot-inner"></div>
+            </div>
+
+            <div className="ai-loading-title">
+              AI is analyzing your documents
+              <span className="ai-loading-dots">
+                <span></span><span></span><span></span>
+              </span>
+            </div>
+
+            <div className="ai-shimmer-bar">
+              <div className="ai-shimmer-fill"></div>
+            </div>
+
             <div className="ai-loading-subtitle">
               Verifying your answers against the uploaded policy documents.<br />
               This may take up to a minute — please wait.

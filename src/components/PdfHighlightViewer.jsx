@@ -36,14 +36,21 @@ function decodeBase64ToText(b64) {
  * Captures all quoted excerpts ("...") or sentence blocks without artificial slicing.
  */
 function extractSearchKeywords(reference) {
-  if (!reference || typeof reference !== 'string') return [];
+  if (!reference) return [];
+  let refStr = '';
+  if (typeof reference === 'string') {
+    refStr = reference.trim();
+  } else if (typeof reference === 'object' && reference !== null) {
+    refStr = (reference.quote || reference.text || reference.citation || '').trim();
+  }
+  if (!refStr) return [];
 
   const results = [];
 
   // 1. Extract ALL quoted strings: "..." or “...”
-  const quoteRegex = /["“]([^"”]{8,})["”]/g;
+  const quoteRegex = /[""\u201c]([^""\u201d]{8,})[""\u201d]/g;
   let match;
-  while ((match = quoteRegex.exec(reference)) !== null) {
+  while ((match = quoteRegex.exec(refStr)) !== null) {
     const q = match[1].trim();
     if (q.length >= 6) {
       results.push(q);
@@ -55,7 +62,7 @@ function extractSearchKeywords(reference) {
   }
 
   // 2. Fallback: strip line numbers like [L14]-[L16]: or Lines 4-7:
-  const stripped = reference
+  const stripped = refStr
     .replace(/^\[?[Ll]\d+\]?(?:\s*[-\u2013]\s*\[?[Ll]\d+\]?)?\s*:?\s*/i, '')
     .replace(/^[Ll]ines?\s+\d+(?:\s*[-\u2013]\s*\d+)?\s*:?\s*/i, '')
     .replace(/^[Ll]\d+\s*:?\s*/i, '')
@@ -63,7 +70,7 @@ function extractSearchKeywords(reference) {
 
   if (!stripped) return [];
 
-  // Split by sentence boundaries (.!? followed by whitespace)
+  // Split by sentence boundaries (.!? followed by whitespace) or newlines
   const sentences = stripped
     .split(/(?<=[.!?])\s+|\n+/)
     .map(s => s.trim())
@@ -72,47 +79,46 @@ function extractSearchKeywords(reference) {
   return sentences.length > 0 ? sentences : [stripped];
 }
 
-/** Normalise string for fuzzy matching */
+/** Normalise string for fuzzy matching — collapse whitespace, lowercase, strip quotes/punctuation marks */
 function normalise(s) {
   return (s || '')
     .toLowerCase()
+    .replace(/[\u201c\u201d\u2018\u2019"'`]/g, '')
+    .replace(/[\u2013\u2014]/g, '-')
     .replace(/\s+/g, ' ')
-    .replace(/[\u201c\u201d\u2018\u2019"']/g, '')
     .trim();
 }
 
 /**
- * Breaks keywords into overlapping search snippets (including 3-4 word n-grams)
- * so every text span across multi-span sentences gets matched and highlighted.
+ * Given an array of search keyword strings, produce an array of normalised
+ * sub-phrases of varying length (short enough to survive PDF span fragmentation).
  */
-function getSnippetsFromKeywords(keywords) {
+function getSearchPhrases(keywords) {
   if (!keywords || !keywords.length) return [];
-  const snippets = new Set();
+  const phrases = new Set();
 
   keywords.forEach(kw => {
     const norm = normalise(kw);
     if (!norm) return;
 
-    if (norm.length <= 40) {
-      snippets.add(norm);
-    } else {
-      snippets.add(norm.slice(0, 35));
+    // Add the full phrase (truncated to reasonable length)
+    if (norm.length <= 80) {
+      phrases.add(norm);
     }
 
+    // Add sub-phrases of 4-8 word windows for better partial matching
     const words = norm.split(' ').filter(Boolean);
-    for (let i = 0; i < words.length; i++) {
-      const chunk3 = words.slice(i, i + 3).join(' ');
-      if (chunk3.length >= 8) {
-        snippets.add(chunk3);
-      }
-      const chunk4 = words.slice(i, i + 4).join(' ');
-      if (chunk4.length >= 10) {
-        snippets.add(chunk4);
+    for (let winSize = Math.min(8, words.length); winSize >= 3; winSize--) {
+      for (let i = 0; i <= words.length - winSize; i++) {
+        const sub = words.slice(i, i + winSize).join(' ');
+        if (sub.length >= 10) {
+          phrases.add(sub);
+        }
       }
     }
   });
 
-  return Array.from(snippets);
+  return Array.from(phrases);
 }
 
 /** Nav button style matching main app pills */
@@ -154,7 +160,7 @@ function TextViewer({ fileBase64, keywords }) {
     return <div style={{ color: '#94a3b8', fontSize: '13px', marginTop: '60px', textAlign: 'center' }}>Loading text…</div>;
   }
 
-  const normSnippets = getSnippetsFromKeywords(keywords);
+  const normSnippets = getSearchPhrases(keywords);
   const lines = text.split('\n');
 
   return (
@@ -229,32 +235,77 @@ export default function PdfHighlightViewer({ fileBase64, fileName, reference, on
     setPdfError(err?.message || 'Invalid PDF structure.');
   }, []);
 
-  /** Multi-sentence highlight scanner using n-grams */
+  /**
+   * Robust multi-span highlight scanner.
+   *
+   * Strategy: PDF text layers fragment sentences across many tiny <span> elements.
+   * Matching a keyword against individual spans rarely works. Instead:
+   *   1. Collect ALL spans on the page and concatenate their text into one string.
+   *   2. Search that concatenated string for our reference phrases.
+   *   3. Map matched character-ranges back to the original spans.
+   *   4. Highlight every span that overlaps a matched range.
+   */
   const onPageLoadSuccess = useCallback((pageNum) => {
     if (!keywords.length) return;
-    const normSnippets = getSnippetsFromKeywords(keywords);
-    if (!normSnippets.length) return;
+    const searchPhrases = getSearchPhrases(keywords);
+    if (!searchPhrases.length) return;
 
     setTimeout(() => {
       const container = pageRefs.current[pageNum];
       if (!container) return;
-      const spans = container.querySelectorAll('.react-pdf__Page__textContent span');
-      let foundOnPage = false;
+
+      const spans = Array.from(
+        container.querySelectorAll('.react-pdf__Page__textContent span')
+      ).filter(sp => sp.textContent);
+
+      if (!spans.length) return;
+
+      // ── Step 1: Build a concatenated normalised page string + per-span range map ──
+      let pageText = '';
+      const spanRanges = []; // { span, start, end }
 
       spans.forEach(span => {
-        const spanText = normalise(span.textContent);
-        if (!spanText) return;
+        const normText = normalise(span.textContent);
+        if (!normText) return;
 
-        const isMatch = normSnippets.some(snip =>
-          spanText.includes(snip) || (spanText.length >= 8 && snip.includes(spanText))
+        const start = pageText.length;
+        pageText += (pageText.length > 0 ? ' ' : '') + normText;
+        const end = pageText.length;
+        spanRanges.push({ span, start, end });
+      });
+
+      if (!pageText) return;
+
+      // ── Step 2: Find all matching ranges in the concatenated page text ──
+      const matchedRanges = []; // { start, end }
+
+      searchPhrases.forEach(phrase => {
+        if (!phrase) return;
+        let searchFrom = 0;
+        while (true) {
+          const idx = pageText.indexOf(phrase, searchFrom);
+          if (idx === -1) break;
+          matchedRanges.push({ start: idx, end: idx + phrase.length });
+          searchFrom = idx + 1;
+        }
+      });
+
+      if (!matchedRanges.length) return;
+
+      // ── Step 3: Map ranges back to spans and highlight ──
+      let foundOnPage = false;
+
+      spanRanges.forEach(({ span, start, end }) => {
+        const overlaps = matchedRanges.some(
+          mr => mr.start < end && mr.end > start
         );
-
-        if (isMatch) {
-          span.style.backgroundColor = 'rgba(254, 240, 138, 0.9)'; // bright yellow highlighter
+        if (overlaps) {
+          span.style.backgroundColor = 'rgba(254, 240, 138, 0.9)';
           span.style.color = '#713f12';
           span.style.borderRadius = '3px';
           span.style.borderBottom = '2px solid #f59e0b';
           span.style.boxShadow = '0 1px 4px rgba(245,158,11,0.2)';
+          span.style.padding = '1px 0';
           foundOnPage = true;
         }
       });
@@ -263,8 +314,18 @@ export default function PdfHighlightViewer({ fileBase64, fileName, reference, on
         matchFoundRef.current = true;
         setMatchPage(pageNum);
         setCurrentPage(pageNum);
+
+        // Scroll the first highlighted span into view
+        const firstHighlighted = spanRanges.find(({ span, start, end }) =>
+          matchedRanges.some(mr => mr.start < end && mr.end > start)
+        );
+        if (firstHighlighted) {
+          setTimeout(() => {
+            firstHighlighted.span.scrollIntoView({ behavior: 'smooth', block: 'center' });
+          }, 100);
+        }
       }
-    }, 200);
+    }, 300);
   }, [keywords]);
 
   const goToPrev = () => setCurrentPage(p => Math.max(1, p - 1));
