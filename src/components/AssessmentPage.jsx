@@ -61,14 +61,12 @@ const TABS = [
 ];
 
 /**
- * Parses markdown-style bold text (**text**) and renders it with <strong> tags in React.
- * Also unescapes literal \n into real newlines.
+ * Helper to render **bold** markdown tags in inline text.
  */
-const renderFormattedText = (text) => {
-  if (!text || typeof text !== 'string') return text;
-  const cleanText = text.replace(/\\n/g, '\n');
-  const parts = cleanText.split(/\*\*(.*?)\*\*/g);
-  if (parts.length <= 1) return cleanText;
+const renderInlineBoldText = (str) => {
+  if (!str || typeof str !== 'string') return str;
+  const parts = str.split(/\*\*(.*?)\*\*/g);
+  if (parts.length <= 1) return str;
 
   return parts.map((part, index) =>
     index % 2 === 1 ? <strong key={index}>{part}</strong> : part
@@ -76,60 +74,102 @@ const renderFormattedText = (text) => {
 };
 
 /**
- * Structurally parses observation text or arrays into clean, scannable bullet point items.
- * If input is an array (observation_points), returns clean array elements.
- * If input is a string, splits on double newlines (\n\n) or section headers if present.
+ * Structurally parses observation text into clean section objects:
+ * [{ title: "Question Response & Policy Status", paragraph: "...", items: ["item 1", "item 2"] }]
+ * Strips HTML <br /> tags, unescapes \n, and keeps section headers free of bullets!
  */
-const parseStructuredObservation = (obsInput) => {
+const parseObservationSections = (obsInput) => {
   if (!obsInput) return [];
 
-  // If already an array (e.g. observation_points from backend)
+  // If already an array of strings
   if (Array.isArray(obsInput)) {
-    return obsInput
-      .map(item => (typeof item === 'string' ? item.trim() : String(item || '').trim()))
-      .filter(Boolean);
+    return obsInput.map((item) => {
+      const cleanItem = String(item || '')
+        .replace(/<br\s*\/?>/gi, '\n')
+        .replace(/\\n/g, '\n')
+        .trim();
+      return {
+        title: '',
+        paragraph: '',
+        items: [cleanItem],
+        raw: cleanItem
+      };
+    });
   }
 
   if (typeof obsInput !== 'string') return [];
 
-  // 1. Unescape literal \n strings if present
-  let text = obsInput.replace(/\\n/g, '\n').trim();
+  // 1. Clean HTML <br /> tags and unescape literal \n
+  let text = obsInput
+    .replace(/<br\s*\/?>/gi, '\n')
+    .replace(/\\n/g, '\n')
+    .trim();
+
   if (!text) return [];
 
-  // 2. Check for double newlines or line splits
-  const lineSplits = text.split(/\n+/).map(s => s.trim()).filter(Boolean);
-  if (lineSplits.length >= 2) {
-    return lineSplits;
+  // 2. Split on major section headers e.g. "**Question Response & Policy Status:**" or "**Documented Actions & Protocols:**"
+  const sectionSplitRegex = /(?=(?:\n|^)\s*(?:\*\*)?[A-Z][A-Za-z0-9\s&,/\\-]{2,45}:(?:\*\*)?)/g;
+
+  const rawSections = text.split(sectionSplitRegex).map(s => s.trim()).filter(Boolean);
+
+  if (rawSections.length === 0) {
+    return [{ title: '', paragraph: text, items: [], raw: text }];
   }
 
-  // 3. Check for known section headers like "Compliance Determination:", "Supporting Evidence:", "Final Assessment:", etc.
-  const headerRegex = /(?=\b(?:Compliance Determination|Supporting Evidence|Final Assessment|Policy Statement|Prevention Measures|Staff Responsibilities|Reporting and Response|Investigation|Coverage|Verdict|Evidence|Gap|Conclusion)\s*:)/gi;
+  return rawSections.map(secStr => {
+    // Check if section string starts with a title e.g. **Title:**
+    const headerMatch = secStr.match(/^(?:\*\*)?([A-Z][A-Za-z0-9\s&,/\\-]{2,45}:)(?:\*\*)?\s*(.*)/s);
 
-  const headerMatches = text.split(headerRegex).map(s => s.trim()).filter(Boolean);
-  if (headerMatches.length >= 2) {
-    return headerMatches;
-  }
+    if (headerMatch) {
+      const title = headerMatch[1].replace(/:$/, '').trim();
+      const body = headerMatch[2].trim();
 
-  return [text];
+      const bodyLines = body.split(/\n+/).map(l => l.trim()).filter(Boolean);
+      const items = [];
+      const paragraphLines = [];
+
+      bodyLines.forEach(line => {
+        const bulletMatch = line.match(/^[*\-•]\s*(.*)/);
+        if (bulletMatch) {
+          items.push(bulletMatch[1].trim());
+        } else {
+          paragraphLines.push(line);
+        }
+      });
+
+      return {
+        title,
+        paragraph: paragraphLines.join(' '),
+        items,
+        raw: body
+      };
+    }
+
+    // No header match — split into sub-bullets vs paragraph
+    const lines = secStr.split(/\n+/).map(l => l.trim()).filter(Boolean);
+    const items = [];
+    const paragraphLines = [];
+
+    lines.forEach(line => {
+      const bulletMatch = line.match(/^[*\-•]\s*(.*)/);
+      if (bulletMatch) {
+        items.push(bulletMatch[1].trim());
+      } else {
+        paragraphLines.push(line);
+      }
+    });
+
+    return {
+      title: '',
+      paragraph: paragraphLines.join(' '),
+      items,
+      raw: secStr
+    };
+  });
 };
 
-/**
- * Ensures header labels like "Document content:", "Evidence:", "Gap:", "Conclusion:" at the start of a point are bolded.
- */
-const formatPointHeader = (point) => {
-  if (!point || typeof point !== 'string') return point;
-  const clean = point.trim();
-
-  // If point already starts with markdown bold **, return as is
-  if (clean.startsWith('**')) return clean;
-
-  // Match "Header Name:" at start of line (e.g. "Document content:", "Evidence:", "Gap:", "Conclusion:")
-  const headerMatch = clean.match(/^([A-Za-z0-9\s_\-]{2,35}:)\s*(.*)/s);
-  if (headerMatch) {
-    return `**${headerMatch[1]}** ${headerMatch[2]}`;
-  }
-  return clean;
-};
+const renderFormattedText = (text) => renderInlineBoldText(text);
+const formatPointHeader = (point) => point;
 
 /**
  * Helper to normalize reference whether passed as string or object { quote, location }.
@@ -1605,43 +1645,8 @@ export default function AssessmentPage({ user, onLogout }) {
                             : 'Yes';
 
                           // Card accent class
-                          const cardAccentClass = (() => {
-                            const cls = getAiBadgeClass(entry.aiFinding);
-                            if (cls === 'obs-pill-agree') return 'card-agree';
-                            if (cls === 'obs-pill-partial') return 'card-partial';
-                            if (cls === 'obs-pill-missing') return 'card-missing';
-                            return 'card-gray';
-                          })();
-
-                          // Status icon for AI badge
-                          const aiStatusIcon = (() => {
-                            const cls = getAiBadgeClass(entry.aiFinding);
-                            if (cls === 'obs-pill-agree') return '✓';
-                            if (cls === 'obs-pill-partial') return '◐';
-                            if (cls === 'obs-pill-missing') return '✗';
-                            return '—';
-                          })();
-
-                          // Gauge colors
-                          const gaugeStroke = scoreNum >= 75 ? '#22c55e' : scoreNum >= 50 ? '#f59e0b' : '#ef4444';
-                          const gaugeGlow = scoreNum >= 75
-                            ? 'rgba(34,197,94,0.4)'
-                            : scoreNum >= 50
-                            ? 'rgba(245,158,11,0.4)'
-                            : 'rgba(239,68,68,0.4)';
-                          const gaugeLevel = scoreNum >= 75 ? 'High' : scoreNum >= 50 ? 'Medium' : 'Low';
-                          const gaugeLevelClass = scoreNum >= 75 ? 'high' : scoreNum >= 50 ? 'medium' : 'low';
-                          const gaugeDesc = scoreNum >= 75
-                            ? 'Strong alignment with the policy requirement'
-                            : scoreNum >= 50
-                            ? 'Partial coverage detected — review recommended'
-                            : 'Significant gaps identified — action required';
-
-                          // SVG ring math
-                          const radius = 30;
-                          const circumference = 2 * Math.PI * radius;
-                          const dashOffset = circumference - (scoreNum / 100) * circumference;
-
+                          const cardAccentClass = getAiBadgeClass(entry.aiFinding);
+                          
                           return (
                             <div key={entry.key} className={`obs-question-card ${cardAccentClass}`}>
 
@@ -1714,8 +1719,8 @@ export default function AssessmentPage({ user, onLogout }) {
 
                                   {/* Row 2: Action buttons */}
                                   <div style={{ display: 'flex', gap: '8px', marginTop: '14px', flexWrap: 'wrap' }}>
-                                    {/* View Details — only if there are bullet points OR a fallback observation text */}
-                                    {(entry.observationPoints.length > 0 || entry.observation) && (
+                                    {/* View Details — only if there are sections OR fallback observation text */}
+                                    {(entry.observationSections.length > 0 || entry.observation) && (
                                       <button
                                         className={`obs-toggle-btn${isExpanded ? ' active' : ''}`}
                                         onClick={() => toggleObsExpand(item.id, entry.key)}
@@ -1735,11 +1740,11 @@ export default function AssessmentPage({ user, onLogout }) {
                                     )}
                                   </div>
 
-                                  {/* Expandable Observation panel — structured bullet points */}
-                                  {isExpanded && (entry.observationPoints.length > 0 || entry.observation) && (() => {
-                                    const pointsToRender = entry.observationPoints.length > 0
-                                      ? entry.observationPoints
-                                      : parseStructuredObservation(entry.observation);
+                                  {/* Expandable Observation panel — structured section cards */}
+                                  {isExpanded && (entry.observationSections.length > 0 || entry.observation) && (() => {
+                                    const sectionsToRender = entry.observationSections.length > 0
+                                      ? entry.observationSections
+                                      : parseObservationSections(entry.observation);
 
                                     return (
                                       <div className="obs-detail-panel">
@@ -1747,14 +1752,76 @@ export default function AssessmentPage({ user, onLogout }) {
                                           <FileText size={14} />
                                           <span>Detailed Observation</span>
                                         </div>
-                                        <ul className="obs-point-list">
-                                          {pointsToRender.map((point, pIdx) => (
-                                            <li key={pIdx} className="obs-point-item">
-                                              <span className="obs-point-marker" />
-                                              <span>{renderFormattedText(formatPointHeader(point))}</span>
-                                            </li>
+
+                                        <div className="obs-section-cards-list" style={{ display: 'flex', flexDirection: 'column', gap: '12px', marginTop: '10px' }}>
+                                          {sectionsToRender.map((sec, secIdx) => (
+                                            <div key={secIdx} className="obs-section-card-box" style={{
+                                              background: '#ffffff',
+                                              borderRadius: '8px',
+                                              border: '1px solid #e2e8f0',
+                                              padding: '12px 14px',
+                                              boxShadow: '0 1px 3px rgba(0,0,0,0.03)'
+                                            }}>
+                                              {/* SECTION HEADER */}
+                                              {sec.title && (
+                                                <div style={{
+                                                  fontSize: '13px',
+                                                  fontWeight: 700,
+                                                  color: '#0f172a',
+                                                  marginBottom: sec.paragraph || sec.items.length ? '8px' : '0',
+                                                  display: 'flex',
+                                                  alignItems: 'center',
+                                                  gap: '6px'
+                                                }}>
+                                                  <span style={{
+                                                    width: '5px',
+                                                    height: '13px',
+                                                    borderRadius: '3px',
+                                                    background: sec.title.toLowerCase().includes('gap')
+                                                      ? '#ef4444'
+                                                      : sec.title.toLowerCase().includes('action') || sec.title.toLowerCase().includes('required')
+                                                        ? '#f59e0b'
+                                                        : '#2563eb',
+                                                    display: 'inline-block'
+                                                  }} />
+                                                  <span>{sec.title}</span>
+                                                </div>
+                                              )}
+
+                                              {/* PARAGRAPH CONTENT */}
+                                              {sec.paragraph && (
+                                                <div style={{ fontSize: '12.5px', lineHeight: '1.6', color: '#334155', marginBottom: sec.items.length ? '10px' : '0' }}>
+                                                  {renderInlineBoldText(sec.paragraph)}
+                                                </div>
+                                              )}
+
+                                              {/* BULLET ITEMS LIST */}
+                                              {sec.items.length > 0 && (
+                                                <ul style={{ display: 'flex', flexDirection: 'column', gap: '8px', paddingLeft: '4px', margin: 0, listStyle: 'none' }}>
+                                                  {sec.items.map((itemStr, itIdx) => (
+                                                    <li key={itIdx} style={{ display: 'flex', gap: '8px', alignItems: 'flex-start', fontSize: '12.5px', lineHeight: '1.6', color: '#334155' }}>
+                                                      <span style={{
+                                                        color: '#2563eb',
+                                                        fontSize: '13px',
+                                                        fontWeight: 800,
+                                                        marginTop: '1px',
+                                                        flexShrink: 0
+                                                      }}>•</span>
+                                                      <span style={{ flex: 1 }}>{renderInlineBoldText(itemStr)}</span>
+                                                    </li>
+                                                  ))}
+                                                </ul>
+                                              )}
+
+                                              {/* RAW FALLBACK */}
+                                              {!sec.title && !sec.paragraph && !sec.items.length && sec.raw && (
+                                                <div style={{ fontSize: '12.5px', lineHeight: '1.6', color: '#334155' }}>
+                                                  {renderInlineBoldText(sec.raw)}
+                                                </div>
+                                              )}
+                                            </div>
                                           ))}
-                                        </ul>
+                                        </div>
                                       </div>
                                     );
                                   })()}
