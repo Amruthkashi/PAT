@@ -1095,21 +1095,16 @@ export default function AssessmentPage({ user, onLogout }) {
         // Calculate document upload stats
         let totalCompCount = 0;
         let uploadedCount = 0;
-        let requiredCompCount = 0;
 
         Object.keys(QUESTIONS_BY_SECTION).forEach(secKey => {
           QUESTIONS_BY_SECTION[secKey].items.forEach(item => {
             totalCompCount++;
             if (uploadedDocs[item.id]) uploadedCount++;
-
-            const itemAnswers = sectionStates[secKey]?.[item.id]?.criteriaAnswers || {};
-            const requiresDoc = item.criteria.some(c => (itemAnswers[c.id] || 'No') === 'Yes');
-            if (requiresDoc) requiredCompCount++;
           });
         });
 
-        const uploadProgressPct = requiredCompCount > 0
-          ? Math.round((uploadedCount / requiredCompCount) * 100)
+        const uploadProgressPct = totalCompCount > 0
+          ? Math.round((uploadedCount / totalCompCount) * 100)
           : 100;
 
         return (
@@ -1125,14 +1120,12 @@ export default function AssessmentPage({ user, onLogout }) {
                   <span className="doc-progress-chip">
                     <FolderCheck size={13} />
                     <span>
-                      {requiredCompCount > 0
-                        ? `${uploadedCount} / ${requiredCompCount} Required Documents Uploaded (${uploadProgressPct}%)`
-                        : `0 Documents Required (All Answered "No")`}
+                      {`${uploadedCount} / ${totalCompCount} Documents Uploaded (${uploadProgressPct}%)`}
                     </span>
                   </span>
                 </div>
                 <p className="doc-page-subtitle">
-                  Attach compliance policy PDFs or text documents for standard components answered "Yes" to enable automated AI observation review.
+                  Attach compliance policy PDFs or text documents for each standard component to enable automated AI observation review.
                 </p>
               </div>
 
@@ -1210,9 +1203,6 @@ export default function AssessmentPage({ user, onLogout }) {
 
                           {sectionItems.map((item) => {
                             const uploaded = uploadedDocs[item.id];
-                            const itemAnswers = sectionStates[sectionKey]?.[item.id]?.criteriaAnswers || {};
-                            // Document is required ONLY if at least one question is answered 'Yes'
-                            const hasYesAnswer = item.criteria.some(c => (itemAnswers[c.id] || 'No') === 'Yes');
 
                             return (
                               <tr key={item.id} className={uploaded ? 'row-has-doc' : ''}>
@@ -1231,10 +1221,8 @@ export default function AssessmentPage({ user, onLogout }) {
                                 <td>
                                   {uploaded ? (
                                     <span className="doc-status-badge uploaded">Uploaded</span>
-                                  ) : hasYesAnswer ? (
-                                    <span className="doc-status-badge pending">Not Attached</span>
                                   ) : (
-                                    <span className="doc-status-badge not-required">Not Required</span>
+                                    <span className="doc-status-badge pending">Not Attached</span>
                                   )}
                                 </td>
                                 <td>
@@ -1257,7 +1245,7 @@ export default function AssessmentPage({ user, onLogout }) {
                                         <Trash2 size={12} />
                                       </button>
                                     </div>
-                                  ) : hasYesAnswer ? (
+                                  ) : (
                                     <label className="upload-trigger-btn">
                                       <Upload size={13} />
                                       <span>Upload Document</span>
@@ -1267,17 +1255,12 @@ export default function AssessmentPage({ user, onLogout }) {
                                         onChange={(e) => handleFileUpload(item.id, e)}
                                       />
                                     </label>
-                                  ) : (
-                                    <div className="doc-no-upload-box" title="Cannot upload document — all questions for this component are answered 'No'">
-                                      <Ban size={12} style={{ color: '#94a3b8' }} />
-                                      <span>Cannot Upload (Answered "No")</span>
-                                    </div>
                                   )}
                                 </td>
                                 <td>
                                   <div className="upload-meta-time">
                                     <Clock size={11} />
-                                    <span>{uploaded ? uploaded.uploadStatus : hasYesAnswer ? 'No document attached' : 'Cannot Upload (Answered "No")'}</span>
+                                    <span>{uploaded ? uploaded.uploadStatus : 'No document attached'}</span>
                                   </div>
                                 </td>
                                 <td>
