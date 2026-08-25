@@ -455,6 +455,12 @@ export default function AssessmentPage({ user, onLogout }) {
     setExpandedRef(prev => ({ ...prev, [k]: !prev[k] }));
   };
 
+  const [expandedJustification, setExpandedJustification] = useState({});
+  const toggleJustification = (compId, criteriaKey) => {
+    const k = `${compId}__${criteriaKey}`;
+    setExpandedJustification(prev => ({ ...prev, [k]: !prev[k] }));
+  };
+
   useEffect(() => {
     if (toastMessage) {
       const timer = setTimeout(() => setToastMessage(''), 3000);
@@ -1481,6 +1487,7 @@ export default function AssessmentPage({ user, onLogout }) {
                         aiConfidence:        val.ai_confidence       || val.score || '',
                         score:               val.ai_confidence       || val.score || '',
                         reference:           refVal,
+                        confidenceJustification: val.confidence_justification || val.confidenceJustification || '',
                         // These are AI chain-of-thought fields — intentionally NOT shown to users
                         // val.requirement_breakdown — hidden
                         // val.evidence_analysis_and_justification — hidden
@@ -1955,6 +1962,42 @@ export default function AssessmentPage({ user, onLogout }) {
                                     <div className={`gauge-mini-badge ${gaugeLevelClass}`}>
                                       {gaugeLevel}
                                     </div>
+                                    {/* Hover info icon — floating tooltip shows confidence_justification */}
+                                    {entry.confidenceJustification && (
+                                      <div
+                                        style={{ position: 'relative', marginTop: '6px', display: 'flex', justifyContent: 'center' }}
+                                        className="gauge-justification-wrap"
+                                      >
+                                        <span
+                                          className="gauge-why-icon"
+                                          style={{
+                                            display: 'inline-flex',
+                                            alignItems: 'center',
+                                            justifyContent: 'center',
+                                            width: '22px',
+                                            height: '22px',
+                                            borderRadius: '50%',
+                                            background: '#f1f5f9',
+                                            border: '1px solid #e2e8f0',
+                                            color: '#64748b',
+                                            cursor: 'pointer',
+                                            transition: 'all 0.15s ease',
+                                          }}
+                                        >
+                                          <Info size={11} />
+                                        </span>
+                                        {/* Floating tooltip — appears on hover via CSS */}
+                                        <div className="gauge-justification-tooltip">
+                                          <div style={{ fontWeight: 800, fontSize: '10px', color: '#b45309', marginBottom: '5px', textTransform: 'uppercase', letterSpacing: '0.5px', display: 'flex', alignItems: 'center', gap: '4px' }}>
+                                            <AlertTriangle size={10} color="#f59e0b" />
+                                            Score Justification
+                                          </div>
+                                          <div style={{ fontSize: '11.5px', lineHeight: '1.55', color: '#78350f' }}>
+                                            {entry.confidenceJustification}
+                                          </div>
+                                        </div>
+                                      </div>
+                                    )}
                                   </div>
                                 )}
                               </div>
