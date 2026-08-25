@@ -33,7 +33,7 @@ function decodeBase64ToText(b64) {
 
 /**
  * Extracts ALL search keywords/phrases from an AI reference string.
- * Captures all quoted excerpts ("...") or sentence blocks without artificial slicing.
+ * Handles mismatched quotes, " and " connectors, and sentence blocks without extracting junk phrases.
  */
 function extractSearchKeywords(reference) {
   if (!reference) return [];
@@ -45,14 +45,21 @@ function extractSearchKeywords(reference) {
   }
   if (!refStr) return [];
 
+  // Unescape literal \n
+  refStr = refStr.replace(/\\n/g, '\n').trim();
+
   const results = [];
 
-  // 1. Extract ALL quoted strings: "..." or “...”
-  const quoteRegex = /[""\u201c]([^""\u201d]{8,})[""\u201d]/g;
+  // 1. Handle quote connectors: Replace `" and "` or `" & "` with newline breaks
+  const cleanedStr = refStr.replace(/["”]\s*(?:and|&|or|,)\s*["“]/gi, '\n');
+
+  // 2. Extract explicit quoted strings: "..." or “...”
+  const quoteRegex = /["“]([^"”]{6,})["”]/g;
   let match;
-  while ((match = quoteRegex.exec(refStr)) !== null) {
+  while ((match = quoteRegex.exec(cleanedStr)) !== null) {
     const q = match[1].trim();
-    if (q.length >= 6) {
+    // Exclude connector junk or tiny strings
+    if (q.length >= 6 && !/^(and|or|&|the|a|an|in|on|at|to|for|with)$/i.test(q)) {
       results.push(q);
     }
   }
@@ -61,7 +68,7 @@ function extractSearchKeywords(reference) {
     return results;
   }
 
-  // 2. Fallback: strip line numbers like [L14]-[L16]: or Lines 4-7:
+  // 3. Fallback: Strip line numbers / line labels and split by newlines or sentence boundaries
   const stripped = refStr
     .replace(/^\[?[Ll]\d+\]?(?:\s*[-\u2013]\s*\[?[Ll]\d+\]?)?\s*:?\s*/i, '')
     .replace(/^[Ll]ines?\s+\d+(?:\s*[-\u2013]\s*\d+)?\s*:?\s*/i, '')
@@ -70,11 +77,11 @@ function extractSearchKeywords(reference) {
 
   if (!stripped) return [];
 
-  // Split by sentence boundaries (.!? followed by whitespace) or newlines
+  // Split by sentence boundaries (.!? followed by whitespace), newlines, or quotes
   const sentences = stripped
-    .split(/(?<=[.!?])\s+|\n+/)
-    .map(s => s.trim())
-    .filter(s => s.length >= 6);
+    .split(/(?:["”`]+|\n+|(?<=[.!?])\s+)/)
+    .map(s => s.trim().replace(/^["“`]+|["”`]+$/g, ''))
+    .filter(s => s.length >= 8 && !/^(and|or|&|the|a|an)$/i.test(s));
 
   return sentences.length > 0 ? sentences : [stripped];
 }
@@ -99,20 +106,21 @@ function getSearchPhrases(keywords) {
 
   keywords.forEach(kw => {
     const norm = normalise(kw);
-    if (!norm) return;
+    if (!norm || norm.length < 5) return;
 
-    // Add the full phrase (truncated to reasonable length)
-    if (norm.length <= 80) {
-      phrases.add(norm);
-    }
+    // Add full normalized phrase
+    phrases.add(norm);
 
-    // Add sub-phrases of 4-8 word windows for better partial matching
+    // If phrase has 3+ words, add sub-phrases of 3-8 word windows so partial PDF span fragmentation matches
     const words = norm.split(' ').filter(Boolean);
-    for (let winSize = Math.min(8, words.length); winSize >= 3; winSize--) {
-      for (let i = 0; i <= words.length - winSize; i++) {
-        const sub = words.slice(i, i + winSize).join(' ');
-        if (sub.length >= 10) {
-          phrases.add(sub);
+    if (words.length >= 3) {
+      for (let winSize = Math.min(8, words.length); winSize >= 3; winSize--) {
+        for (let i = 0; i <= words.length - winSize; i++) {
+          const sub = words.slice(i, i + winSize).join(' ');
+          // Require at least 14 characters to avoid generic false positive matches
+          if (sub.length >= 14) {
+            phrases.add(sub);
+          }
         }
       }
     }

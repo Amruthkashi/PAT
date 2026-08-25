@@ -35,7 +35,8 @@ import {
   Filter,
   FolderCheck,
   MapPin,
-  Ban
+  Ban,
+  Link2
 } from 'lucide-react';
 
 import { QUESTIONS_BY_SECTION } from '../data/questionsData';
@@ -244,10 +245,27 @@ const parseReferencePoints = (reference) => {
 /**
  * Renders reference citation text & location badge.
  * Displays reference.quote point-by-point, plus reference.location as a small subtitle caption badge.
+ * If onViewSingleRef is provided, each reference point gets a small link icon that, when clicked,
+ * opens the PDF viewer with ONLY that specific reference highlighted.
  */
-const renderReferenceContent = (reference) => {
+const renderReferenceContent = (reference, onViewSingleRef) => {
   const { quote, location } = normalizeReferenceObj(reference);
   const points = parseReferencePoints(quote);
+
+  const linkIconStyle = {
+    display: 'inline-flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    width: '22px',
+    height: '22px',
+    borderRadius: '50%',
+    background: '#eff6ff',
+    border: '1px solid #bfdbfe',
+    cursor: 'pointer',
+    flexShrink: 0,
+    marginLeft: '6px',
+    transition: 'all 0.15s ease',
+  };
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', marginTop: '6px' }}>
@@ -283,15 +301,37 @@ const renderReferenceContent = (reference) => {
               }}>
                 {idx + 1}
               </span>
-              <div style={{ flex: 1, background: '#ffffff', borderRadius: '6px', padding: '8px 12px', border: '1px solid #dcfce7', whiteSpace: 'pre-line' }}>
-                {renderFormattedText(formatPointHeader(pt))}
+              <div style={{ flex: 1, background: '#ffffff', borderRadius: '6px', padding: '8px 12px', border: '1px solid #dcfce7', whiteSpace: 'pre-line', display: 'flex', alignItems: 'flex-start', gap: '4px' }}>
+                <span style={{ flex: 1 }}>{renderFormattedText(formatPointHeader(pt))}</span>
+                {onViewSingleRef && (
+                  <span
+                    title="View this reference in document"
+                    style={linkIconStyle}
+                    onClick={() => onViewSingleRef(pt)}
+                    onMouseEnter={e => { e.currentTarget.style.background = '#dbeafe'; e.currentTarget.style.borderColor = '#93c5fd'; }}
+                    onMouseLeave={e => { e.currentTarget.style.background = '#eff6ff'; e.currentTarget.style.borderColor = '#bfdbfe'; }}
+                  >
+                    <Link2 size={11} color="#2563eb" />
+                  </span>
+                )}
               </div>
             </div>
           ))}
         </div>
       ) : (
-        <div style={{ fontSize: '12.5px', lineHeight: '1.65', color: '#1e293b', whiteSpace: 'pre-line', background: '#ffffff', borderRadius: '6px', padding: '8px 12px', border: '1px solid #dcfce7' }}>
-          {renderFormattedText(formatPointHeader(points[0] || quote))}
+        <div style={{ fontSize: '12.5px', lineHeight: '1.65', color: '#1e293b', whiteSpace: 'pre-line', background: '#ffffff', borderRadius: '6px', padding: '8px 12px', border: '1px solid #dcfce7', display: 'flex', alignItems: 'flex-start', gap: '4px' }}>
+          <span style={{ flex: 1 }}>{renderFormattedText(formatPointHeader(points[0] || quote))}</span>
+          {onViewSingleRef && (
+            <span
+              title="View this reference in document"
+              style={linkIconStyle}
+              onClick={() => onViewSingleRef(points[0] || quote)}
+              onMouseEnter={e => { e.currentTarget.style.background = '#dbeafe'; e.currentTarget.style.borderColor = '#93c5fd'; }}
+              onMouseLeave={e => { e.currentTarget.style.background = '#eff6ff'; e.currentTarget.style.borderColor = '#bfdbfe'; }}
+            >
+              <Link2 size={11} color="#2563eb" />
+            </span>
+          )}
         </div>
       )}
     </div>
@@ -1418,36 +1458,35 @@ export default function AssessmentPage({ user, onLogout }) {
                 const componentObs = getComponentObs(aiObservations, item.id);
 
                 // ── Build an array of per-question entries from componentObs ─
-                // Each entry: { key, question, summary, observation, observationPoints, aiFinding, score, reference }
+                // Each entry: { key, question, summary, observation, observationSections, aiFinding, score, reference }
                 const buildQuestionEntries = (compObs) => {
                   if (!compObs || typeof compObs !== 'object') return [];
                   return Object.entries(compObs)
                     .filter(([, val]) => val && typeof val === 'object')
                     .map(([key, val]) => {
-                      // Structurally parse observation into clean bullet points
                       const rawObs = (Array.isArray(val.observation_points) && val.observation_points.length > 0)
                         ? val.observation_points
                         : (val.observation || val.text || '');
 
-                      const obsPoints = parseStructuredObservation(rawObs);
+                      const obsSections = parseObservationSections(rawObs);
                       const refVal = val.reference || val.citation || val.ref || null;
 
                       return {
                         key,
-                        question:           val.question            || '',
-                        summary:            val.summary             || '',
-                        observation:        val.observation         || val.text || '',
-                        observationPoints:  obsPoints,
-                        aiFinding:          val.AI_finding          || val.ai_finding || val.finding || '',
-                        aiConfidence:       val.ai_confidence       || val.score || '',
-                        score:              val.ai_confidence       || val.score || '',
-                        reference:          refVal,
+                        question:            val.question            || '',
+                        summary:             val.summary             || '',
+                        observation:         val.observation         || val.text || '',
+                        observationSections: obsSections,
+                        aiFinding:           val.AI_finding          || val.ai_finding || val.finding || '',
+                        aiConfidence:        val.ai_confidence       || val.score || '',
+                        score:               val.ai_confidence       || val.score || '',
+                        reference:           refVal,
                         // These are AI chain-of-thought fields — intentionally NOT shown to users
                         // val.requirement_breakdown — hidden
                         // val.evidence_analysis_and_justification — hidden
                       };
                     })
-                    .filter(e => e.question || e.observation || e.observationPoints.length || e.summary || e.reference || e.aiFinding);
+                    .filter(e => e.question || e.observation || e.observationSections?.length || e.summary || e.reference || e.aiFinding);
                 };
 
                 const questionEntries = buildQuestionEntries(componentObs);
@@ -1627,8 +1666,22 @@ export default function AssessmentPage({ user, onLogout }) {
                             ? (sectionStates[sectionKey]?.[item.id]?.criteriaAnswers?.[matchedCriteria.id] || 'Yes')
                             : 'Yes';
 
-                          // Card accent class
-                          const cardAccentClass = getAiBadgeClass(entry.aiFinding);
+                          // Card accent class & gauge properties
+                          const cardAccentClass = (() => {
+                            const cls = getAiBadgeClass(entry.aiFinding);
+                            if (cls === 'obs-pill-agree') return 'card-agree';
+                            if (cls === 'obs-pill-partial') return 'card-partial';
+                            if (cls === 'obs-pill-missing') return 'card-missing';
+                            return 'card-gray';
+                          })();
+                          const gaugeStroke = scoreNum >= 75 ? '#22c55e' : scoreNum >= 50 ? '#f59e0b' : '#ef4444';
+                          const gaugeGlow = scoreNum >= 75
+                            ? 'rgba(34,197,94,0.4)'
+                            : scoreNum >= 50
+                            ? 'rgba(245,158,11,0.4)'
+                            : 'rgba(239,68,68,0.4)';
+                          const gaugeLevel = scoreNum >= 75 ? 'High' : scoreNum >= 50 ? 'Medium' : 'Low';
+                          const gaugeLevelClass = scoreNum >= 75 ? 'high' : scoreNum >= 50 ? 'medium' : 'low';
                           
                           return (
                             <div key={entry.key} className={`obs-question-card ${cardAccentClass}`}>
@@ -1703,7 +1756,7 @@ export default function AssessmentPage({ user, onLogout }) {
                                   {/* Row 2: Action buttons */}
                                   <div style={{ display: 'flex', gap: '8px', marginTop: '14px', flexWrap: 'wrap' }}>
                                     {/* View Details — only if there are sections OR fallback observation text */}
-                                    {(entry.observationSections.length > 0 || entry.observation) && (
+                                    {((entry.observationSections?.length > 0) || entry.observation) && (
                                       <button
                                         className={`obs-toggle-btn${isExpanded ? ' active' : ''}`}
                                         onClick={() => toggleObsExpand(item.id, entry.key)}
@@ -1724,8 +1777,8 @@ export default function AssessmentPage({ user, onLogout }) {
                                   </div>
 
                                   {/* Expandable Observation panel — structured section cards */}
-                                  {isExpanded && (entry.observationSections.length > 0 || entry.observation) && (() => {
-                                    const sectionsToRender = entry.observationSections.length > 0
+                                  {isExpanded && ((entry.observationSections?.length > 0) || entry.observation) && (() => {
+                                    const sectionsToRender = (entry.observationSections && entry.observationSections.length > 0)
                                       ? entry.observationSections
                                       : parseObservationSections(entry.observation);
 
@@ -1751,7 +1804,7 @@ export default function AssessmentPage({ user, onLogout }) {
                                                   fontSize: '13px',
                                                   fontWeight: 700,
                                                   color: '#0f172a',
-                                                  marginBottom: sec.paragraph || sec.items.length ? '8px' : '0',
+                                                  marginBottom: sec.paragraph || sec.items?.length ? '8px' : '0',
                                                   display: 'flex',
                                                   alignItems: 'center',
                                                   gap: '6px'
@@ -1773,13 +1826,13 @@ export default function AssessmentPage({ user, onLogout }) {
 
                                               {/* PARAGRAPH CONTENT */}
                                               {sec.paragraph && (
-                                                <div style={{ fontSize: '12.5px', lineHeight: '1.6', color: '#334155', marginBottom: sec.items.length ? '10px' : '0' }}>
+                                                <div style={{ fontSize: '12.5px', lineHeight: '1.6', color: '#334155', marginBottom: sec.items?.length ? '10px' : '0' }}>
                                                   {renderInlineBoldText(sec.paragraph)}
                                                 </div>
                                               )}
 
                                               {/* BULLET ITEMS LIST */}
-                                              {sec.items.length > 0 && (
+                                              {(sec.items?.length > 0) && (
                                                 <ul style={{ display: 'flex', flexDirection: 'column', gap: '8px', paddingLeft: '4px', margin: 0, listStyle: 'none' }}>
                                                   {sec.items.map((itemStr, itIdx) => (
                                                     <li key={itIdx} style={{ display: 'flex', gap: '8px', alignItems: 'flex-start', fontSize: '12.5px', lineHeight: '1.6', color: '#334155' }}>
@@ -1797,7 +1850,7 @@ export default function AssessmentPage({ user, onLogout }) {
                                               )}
 
                                               {/* RAW FALLBACK */}
-                                              {!sec.title && !sec.paragraph && !sec.items.length && sec.raw && (
+                                              {!sec.title && !sec.paragraph && (!sec.items || !sec.items.length) && sec.raw && (
                                                 <div style={{ fontSize: '12.5px', lineHeight: '1.6', color: '#334155' }}>
                                                   {renderInlineBoldText(sec.raw)}
                                                 </div>
@@ -1822,7 +1875,16 @@ export default function AssessmentPage({ user, onLogout }) {
                                           <Quote size={14} />
                                           Document Reference &amp; Citation
                                         </div>
-                                        {renderReferenceContent(entry.reference)}
+                                        {renderReferenceContent(
+                                          entry.reference,
+                                          uploaded?.fileBase64
+                                            ? (singleRefText) => setPdfViewer({
+                                                fileBase64: uploaded.fileBase64,
+                                                fileName: uploaded.fileName,
+                                                reference: singleRefText,
+                                              })
+                                            : null
+                                        )}
                                         {/* View in File button — opens PDF with highlight */}
                                         {uploaded?.fileBase64 && (
                                           <div style={{ marginTop: '10px', display: 'flex', justifyContent: 'flex-end' }}>
@@ -1849,7 +1911,7 @@ export default function AssessmentPage({ user, onLogout }) {
                                               }}
                                             >
                                               <ExternalLink size={12} />
-                                              View in File
+                                              View All in File
                                             </button>
                                           </div>
                                         )}
